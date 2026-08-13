@@ -1,0 +1,3 @@
+instrument_id,currency,notional,start_date,maturity_date,rate_type,fixed_rate,spread,reference_index,repricing_frequency_months,next_repricing_date,coupon_frequency_months
+BND001,EUR,1000000,2021-03-01,2031-03-01,fixed,0.021,,,,,12
+BND002,EUR,500000,2020-09-15,2028-09-15,floating,,0.005,EURIBOR_6M,6,2027-03-15,6
