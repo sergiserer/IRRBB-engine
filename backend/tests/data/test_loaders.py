@@ -1,7 +1,7 @@
 from datetime import date
 from pathlib import Path
 
-from app.data.loaders import load_bonds, load_issued_debt, load_mortgages, load_term_deposits
+from app.data.loaders import load_balance_sheet, load_bonds, load_issued_debt, load_mortgages, load_nmd, load_swaps, load_term_deposits
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
 
@@ -39,3 +39,34 @@ def test_load_term_deposits_forces_fixed_rate_type():
     assert len(deposits) == 2
     assert all(d.rate_type == "fixed" for d in deposits)
     assert deposits[0].fixed_rate == 0.025
+
+
+def test_load_nmd_parses_rows():
+    deposits = load_nmd(DATA_DIR / "nmd.csv")
+    assert len(deposits) == 2
+    assert deposits[0].instrument_id == "NMD001"
+    assert deposits[0].notional == 3_000_000
+
+
+def test_load_swaps_parses_pay_and_receive_legs():
+    swaps = load_swaps(DATA_DIR / "swaps.csv")
+    assert len(swaps) == 2
+    pay_fixed_swap, pay_floating_swap = swaps
+    assert pay_fixed_swap.pay_leg.rate_type == "fixed"
+    assert pay_fixed_swap.pay_leg.fixed_rate == 0.025
+    assert pay_fixed_swap.receive_leg.rate_type == "floating"
+    assert pay_fixed_swap.receive_leg.reference_index == "EURIBOR_6M"
+    assert pay_floating_swap.pay_leg.rate_type == "floating"
+    assert pay_floating_swap.receive_leg.fixed_rate == 0.027
+
+
+def test_load_balance_sheet_loads_all_instrument_types():
+    bs = load_balance_sheet(DATA_DIR)
+    assert len(bs.mortgages) == 2
+    assert len(bs.bonds) == 2
+    assert len(bs.issued_debt) == 2
+    assert len(bs.term_deposits) == 2
+    assert len(bs.nmd) == 2
+    assert len(bs.swaps) == 2
+    assert bs.total_assets() > 0
+    assert bs.total_liabilities() > 0

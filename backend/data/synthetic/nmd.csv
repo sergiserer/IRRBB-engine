@@ -1,0 +1,3 @@
+instrument_id,currency,notional,as_of_date,rate
+NMD001,EUR,3000000,2026-08-13,0.001
+NMD002,EUR,1200000,2026-08-13,0.0005
