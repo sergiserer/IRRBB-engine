@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from app.domain.instruments import Bond, IssuedDebt, Mortgage, TermDeposit
+from app.domain.instruments import Bond, IssuedDebt, Leg, Mortgage, NonMaturingDeposit, Swap, TermDeposit
 
 
 def test_mortgage_fixed_rate_valid():
@@ -116,3 +116,68 @@ def test_term_deposit_defaults_to_fixed_rate_type():
     )
     assert td.rate_type == "fixed"
     assert td.spread is None
+
+
+def test_nmd_valid():
+    nmd = NonMaturingDeposit(
+        instrument_id="NMD001",
+        currency="EUR",
+        notional=3_000_000,
+        as_of_date=date(2026, 8, 13),
+        rate=0.001,
+    )
+    assert nmd.notional == 3_000_000
+
+
+def test_nmd_non_positive_notional_raises():
+    with pytest.raises(ValidationError):
+        NonMaturingDeposit(
+            instrument_id="NMD002",
+            currency="EUR",
+            notional=0,
+            as_of_date=date(2026, 8, 13),
+            rate=0.001,
+        )
+
+
+def test_swap_valid_fixed_vs_floating_legs():
+    swap = Swap(
+        instrument_id="SWP001",
+        currency="EUR",
+        notional=5_000_000,
+        start_date=date(2024, 1, 15),
+        maturity_date=date(2029, 1, 15),
+        payment_frequency_months=6,
+        pay_leg=Leg(rate_type="fixed", fixed_rate=0.025),
+        receive_leg=Leg(rate_type="floating", spread=0.003, reference_index="EURIBOR_6M"),
+    )
+    assert swap.pay_leg.fixed_rate == 0.025
+    assert swap.receive_leg.reference_index == "EURIBOR_6M"
+
+
+def test_swap_leg_missing_fields_raises():
+    with pytest.raises(ValidationError):
+        Swap(
+            instrument_id="SWP002",
+            currency="EUR",
+            notional=2_000_000,
+            start_date=date(2023, 7, 1),
+            maturity_date=date(2028, 7, 1),
+            payment_frequency_months=3,
+            pay_leg=Leg(rate_type="floating", spread=0.002, reference_index="EURIBOR_3M"),
+            receive_leg=Leg(rate_type="fixed"),  # missing fixed_rate
+        )
+
+
+def test_swap_maturity_before_start_raises():
+    with pytest.raises(ValidationError):
+        Swap(
+            instrument_id="SWP003",
+            currency="EUR",
+            notional=1_000_000,
+            start_date=date(2028, 1, 1),
+            maturity_date=date(2020, 1, 1),
+            payment_frequency_months=6,
+            pay_leg=Leg(rate_type="fixed", fixed_rate=0.02),
+            receive_leg=Leg(rate_type="fixed", fixed_rate=0.02),
+        )

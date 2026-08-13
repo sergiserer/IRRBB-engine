@@ -69,3 +69,40 @@ class IssuedDebt(Instrument):
 
 class TermDeposit(Instrument):
     rate_type: Literal["fixed"] = "fixed"
+
+
+class NonMaturingDeposit(BaseModel):
+    instrument_id: str
+    currency: str = Field(min_length=3, max_length=3)
+    notional: float = Field(gt=0)
+    as_of_date: date
+    rate: float = Field(ge=0)
+
+
+class Leg(BaseModel):
+    rate_type: RateType
+    fixed_rate: Optional[float] = None
+    spread: Optional[float] = None
+    reference_index: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_fields(self) -> "Leg":
+        _validate_rate_fields(self.rate_type, self.fixed_rate, self.spread, self.reference_index)
+        return self
+
+
+class Swap(BaseModel):
+    instrument_id: str
+    currency: str = Field(min_length=3, max_length=3)
+    notional: float = Field(gt=0)
+    start_date: date
+    maturity_date: date
+    payment_frequency_months: int = Field(gt=0)
+    pay_leg: Leg
+    receive_leg: Leg
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> "Swap":
+        if self.maturity_date <= self.start_date:
+            raise ValueError("maturity_date must be after start_date")
+        return self
