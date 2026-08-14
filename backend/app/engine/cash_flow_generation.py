@@ -6,7 +6,7 @@ from typing import List
 import pandas as pd
 
 from app.domain.cash_flow import CashFlow, Side
-from app.domain.instruments import Bond, Instrument, IssuedDebt, NonMaturingDeposit, TermDeposit
+from app.domain.instruments import Bond, Instrument, IssuedDebt, Mortgage, NonMaturingDeposit, TermDeposit
 
 
 def nmd_cash_flows(nmd: NonMaturingDeposit, as_of_date: date) -> List[CashFlow]:
@@ -148,3 +148,61 @@ def issued_debt_cash_flows(debt: IssuedDebt, as_of_date: date) -> List[CashFlow]
         as_of_date,
         side="liability",
     )
+
+
+def _period_count(start: date, end: date, step_months: int) -> int:
+    """Counts step_months-sized periods from start to end. Assumes end is
+    reachable in an exact number of steps (same assumption as the coupon
+    schedule)."""
+    n = 0
+    current = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    step = pd.DateOffset(months=step_months)
+    while current < end_ts:
+        current += step
+        n += 1
+    return n
+
+
+def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
+    if mortgage.rate_type == "floating":
+        return floating_repricing_cash_flow(mortgage, as_of_date, side="asset")
+    if mortgage.maturity_date <= as_of_date:
+        return []
+
+    freq = mortgage.payment_frequency_months
+    n = _period_count(as_of_date, mortgage.maturity_date, freq)
+    period_rate = mortgage.fixed_rate * (freq / 12)
+    payment = mortgage.notional * period_rate / (1 - (1 + period_rate) ** -n)
+
+    flows: List[CashFlow] = []
+    balance = mortgage.notional
+    current = pd.Timestamp(as_of_date)
+    step = pd.DateOffset(months=freq)
+    for _ in range(n):
+        current += step
+        interest = balance * period_rate
+        principal = payment - interest
+        balance -= principal
+        cf_date = current.date()
+        flows.append(
+            CashFlow(
+                instrument_id=mortgage.instrument_id,
+                currency=mortgage.currency,
+                date=cf_date,
+                amount=interest,
+                flow_type="interest",
+                side="asset",
+            )
+        )
+        flows.append(
+            CashFlow(
+                instrument_id=mortgage.instrument_id,
+                currency=mortgage.currency,
+                date=cf_date,
+                amount=principal,
+                flow_type="principal",
+                side="asset",
+            )
+        )
+    return flows

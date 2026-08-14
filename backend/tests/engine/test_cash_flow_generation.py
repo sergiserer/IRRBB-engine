@@ -7,6 +7,7 @@ from app.engine.cash_flow_generation import (
     bond_cash_flows,
     floating_repricing_cash_flow,
     issued_debt_cash_flows,
+    mortgage_cash_flows,
     nmd_cash_flows,
     term_deposit_cash_flows,
 )
@@ -180,3 +181,74 @@ def test_issued_debt_fixed_coupon_schedule_side_is_liability():
     assert len(principal_flows) == 1
     assert principal_flows[0].amount == 2_000_000
     assert principal_flows[0].date == date(2027, 1, 10)
+
+
+def test_mortgage_french_amortization_reference_case():
+    # notional 100,000 / 6%/yr / monthly / 2 remaining periods, starting
+    # exactly at as_of_date so the schedule is easy to check by hand.
+    mortgage = Mortgage(
+        instrument_id="MTGREF",
+        currency="EUR",
+        notional=100_000,
+        start_date=date(2024, 1, 1),
+        maturity_date=date(2024, 3, 1),
+        rate_type="fixed",
+        fixed_rate=0.06,
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    flows = mortgage_cash_flows(mortgage, date(2024, 1, 1))
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    principal_flows = sorted([f for f in flows if f.flow_type == "principal"], key=lambda f: f.date)
+
+    assert len(interest_flows) == 2
+    assert len(principal_flows) == 2
+    assert interest_flows[0].date == date(2024, 2, 1)
+    assert interest_flows[1].date == date(2024, 3, 1)
+    # First period interest is exactly balance * period_rate = 100,000 * 0.5% = 500.00
+    assert interest_flows[0].amount == pytest.approx(500.0)
+
+    # Annuity invariant: total principal repaid equals the original balance.
+    assert sum(f.amount for f in principal_flows) == pytest.approx(100_000.0)
+    # Each period's total payment (interest + principal) is constant.
+    payment_1 = interest_flows[0].amount + principal_flows[0].amount
+    payment_2 = interest_flows[1].amount + principal_flows[1].amount
+    assert payment_1 == pytest.approx(payment_2)
+    assert all(f.side == "asset" for f in flows)
+
+
+def test_mortgage_matured_returns_empty():
+    mortgage = Mortgage(
+        instrument_id="MTGOLD",
+        currency="EUR",
+        notional=50_000,
+        start_date=date(2010, 1, 1),
+        maturity_date=date(2020, 1, 1),
+        rate_type="fixed",
+        fixed_rate=0.03,
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    flows = mortgage_cash_flows(mortgage, date(2026, 8, 14))
+    assert flows == []
+
+
+def test_mortgage_floating_delegates_to_repricing_flow():
+    mortgage = Mortgage(
+        instrument_id="MTG002",
+        currency="EUR",
+        notional=180_000,
+        start_date=date(2022, 6, 1),
+        maturity_date=date(2052, 6, 1),
+        rate_type="floating",
+        spread=0.012,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2027, 6, 1),
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    flows = mortgage_cash_flows(mortgage, date(2026, 8, 14))
+    assert len(flows) == 1
+    assert flows[0].date == date(2027, 6, 1)
+    assert flows[0].amount == 180_000
