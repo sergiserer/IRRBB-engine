@@ -18,8 +18,11 @@ frontend/.vite/
 .DS_Store
 Thumbs.db
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code / AI development artifacts (not part of the public repo)
+CLAUDE.md
+.claude/
+docs/superpowers/
+docs/internal/
 
 # Datos reales (nunca deben entrar al repo)
 *.real.csv
