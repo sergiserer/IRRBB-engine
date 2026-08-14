@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List
 
-from app.domain.cash_flow import CashFlow, Side
+from app.domain.cash_flow import CashFlow
 from app.domain.instruments import NonMaturingDeposit
 
 
