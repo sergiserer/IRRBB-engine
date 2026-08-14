@@ -173,7 +173,10 @@ def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
     freq = mortgage.payment_frequency_months
     n = _period_count(as_of_date, mortgage.maturity_date, freq)
     period_rate = mortgage.fixed_rate * (freq / 12)
-    payment = mortgage.notional * period_rate / (1 - (1 + period_rate) ** -n)
+    if period_rate == 0:
+        payment = mortgage.notional / n
+    else:
+        payment = mortgage.notional * period_rate / (1 - (1 + period_rate) ** -n)
 
     flows: List[CashFlow] = []
     balance = mortgage.notional

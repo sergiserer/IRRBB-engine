@@ -252,3 +252,34 @@ def test_mortgage_floating_delegates_to_repricing_flow():
     assert len(flows) == 1
     assert flows[0].date == date(2027, 6, 1)
     assert flows[0].amount == 180_000
+
+
+def test_mortgage_zero_percent_uses_straight_line_amortization():
+    # 0% fixed-rate mortgage with notional 100,000 / 2 periods
+    # Should use straight-line amortization: each period principal = 100,000 / 2 = 50,000
+    # Interest should be 0 for all periods
+    mortgage = Mortgage(
+        instrument_id="MTG_ZERO",
+        currency="EUR",
+        notional=100_000,
+        start_date=date(2024, 1, 1),
+        maturity_date=date(2024, 3, 1),
+        rate_type="fixed",
+        fixed_rate=0.0,
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    flows = mortgage_cash_flows(mortgage, date(2024, 1, 1))
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    principal_flows = sorted([f for f in flows if f.flow_type == "principal"], key=lambda f: f.date)
+
+    assert len(interest_flows) == 2
+    assert len(principal_flows) == 2
+    # All interest flows should be 0
+    assert all(f.amount == pytest.approx(0.0) for f in interest_flows)
+    # Each principal flow should be 50,000 (100,000 / 2 periods)
+    assert all(f.amount == pytest.approx(50_000.0) for f in principal_flows)
+    # Total principal should equal notional
+    assert sum(f.amount for f in principal_flows) == pytest.approx(100_000.0)
+    # No NaN values
+    assert all(not f.amount != f.amount for f in flows)  # NaN != NaN is True
