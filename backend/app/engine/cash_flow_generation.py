@@ -53,14 +53,27 @@ def floating_repricing_cash_flow(instrument: Instrument, as_of_date: date, side:
     """Basic Fase 2 treatment for floating-rate instruments: only the
     principal is slotted, at the next repricing date. Interim coupons are
     not projected because their size depends on a future reference rate
-    that isn't available until the discount curve is wired in (Fase 3+)."""
+    that isn't available until the discount curve is wired in (Fase 3+).
+
+    instrument.next_repricing_date is a static snapshot field that can be
+    in the past relative to as_of_date (the normal state as the report
+    date advances past it). When that happens, roll it forward on the
+    instrument's own repricing grid until it's strictly after as_of_date
+    — an instrument whose reset date has already passed reprices at its
+    next scheduled reset — clamped so the roll-forward never overshoots
+    the instrument's own maturity_date."""
     if instrument.maturity_date <= as_of_date:
         return []
+    next_reset = instrument.next_repricing_date
+    step = pd.DateOffset(months=instrument.repricing_frequency_months)
+    while next_reset <= as_of_date:
+        next_reset = (pd.Timestamp(next_reset) + step).date()
+    next_reset = min(next_reset, instrument.maturity_date)
     return [
         CashFlow(
             instrument_id=instrument.instrument_id,
             currency=instrument.currency,
-            date=instrument.next_repricing_date,
+            date=next_reset,
             amount=instrument.notional,
             flow_type="principal",
             side=side,
@@ -150,28 +163,33 @@ def issued_debt_cash_flows(debt: IssuedDebt, as_of_date: date) -> List[CashFlow]
     )
 
 
-def _period_count(start: date, end: date, step_months: int) -> int:
-    """Counts step_months-sized periods from start to end. Assumes end is
-    reachable in an exact number of steps (same assumption as the coupon
-    schedule)."""
-    n = 0
-    current = pd.Timestamp(start)
-    end_ts = pd.Timestamp(end)
-    step = pd.DateOffset(months=step_months)
-    while current < end_ts:
-        current += step
-        n += 1
-    return n
-
-
 def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
+    """Assumes an exact integer number of payment periods between
+    start_date and maturity_date (same assumption as _fixed_coupon_schedule);
+    no stub-period handling in Fase 2.
+
+    The payment date grid is anchored to start_date (not as_of_date) since
+    that's the instrument's actual contractual payment schedule; as_of_date
+    is not generally on that grid. balance starts from mortgage.notional,
+    which represents the outstanding principal as of as_of_date (not the
+    origination amount) — only dates falling strictly after as_of_date are
+    emitted."""
     if mortgage.rate_type == "floating":
         return floating_repricing_cash_flow(mortgage, as_of_date, side="asset")
     if mortgage.maturity_date <= as_of_date:
         return []
 
     freq = mortgage.payment_frequency_months
-    n = _period_count(as_of_date, mortgage.maturity_date, freq)
+    step = pd.DateOffset(months=freq)
+    maturity_ts = pd.Timestamp(mortgage.maturity_date)
+    current = pd.Timestamp(mortgage.start_date) + step
+    grid_dates: List[date] = []
+    while current <= maturity_ts:
+        grid_dates.append(current.date())
+        current += step
+    remaining_dates = [d for d in grid_dates if d > as_of_date]
+    n = len(remaining_dates)
+
     period_rate = mortgage.fixed_rate * (freq / 12)
     if period_rate == 0:
         payment = mortgage.notional / n
@@ -180,14 +198,10 @@ def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
 
     flows: List[CashFlow] = []
     balance = mortgage.notional
-    current = pd.Timestamp(as_of_date)
-    step = pd.DateOffset(months=freq)
-    for _ in range(n):
-        current += step
+    for cf_date in remaining_dates:
         interest = balance * period_rate
         principal = payment - interest
         balance -= principal
-        cf_date = current.date()
         flows.append(
             CashFlow(
                 instrument_id=mortgage.instrument_id,

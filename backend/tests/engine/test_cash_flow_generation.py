@@ -109,6 +109,49 @@ def test_floating_repricing_cash_flow_matured_returns_empty():
     assert flows == []
 
 
+def test_floating_repricing_cash_flow_rolls_forward_past_next_repricing_date():
+    # Regression test for the crash bug: next_repricing_date is BEFORE
+    # as_of_date, which is the normal state of a static snapshot field as
+    # the report date advances past it. The function must roll the reset
+    # date forward on the instrument's own repricing grid instead of
+    # returning a stale, past-dated cash flow (which previously made
+    # bucket_for raise ValueError downstream).
+    bond = Bond(
+        instrument_id="BND003",
+        currency="EUR",
+        notional=750_000,
+        start_date=date(2020, 3, 15),
+        maturity_date=date(2035, 3, 15),
+        rate_type="floating",
+        spread=0.006,
+        reference_index="EURIBOR_6M",
+        repricing_frequency_months=6,
+        next_repricing_date=date(2026, 3, 15),
+        coupon_frequency_months=6,
+    )
+    as_of_date = date(2026, 8, 14)
+    flows = floating_repricing_cash_flow(bond, as_of_date, side="asset")
+
+    assert len(flows) == 1
+    cf = flows[0]
+    # 2026-03-15 is before as_of_date; rolling forward by one 6-month step
+    # (the instrument's repricing_frequency_months) lands on 2026-09-15,
+    # which is strictly after as_of_date.
+    assert cf.date == date(2026, 9, 15)
+    assert cf.date > as_of_date
+    # The rolled-forward date must remain on the original repricing grid:
+    # next_repricing_date + k * repricing_frequency_months for integer k >= 1.
+    months_elapsed = (cf.date.year - date(2026, 3, 15).year) * 12 + (
+        cf.date.month - date(2026, 3, 15).month
+    )
+    assert cf.date.day == date(2026, 3, 15).day
+    assert months_elapsed % bond.repricing_frequency_months == 0
+    assert months_elapsed >= bond.repricing_frequency_months
+    assert cf.amount == 750_000
+    assert cf.flow_type == "principal"
+    assert cf.side == "asset"
+
+
 def test_bond_fixed_coupon_schedule_reference_case():
     bond = Bond(
         instrument_id="BND001",
@@ -252,6 +295,36 @@ def test_mortgage_floating_delegates_to_repricing_flow():
     assert len(flows) == 1
     assert flows[0].date == date(2027, 6, 1)
     assert flows[0].amount == 180_000
+
+
+def test_mortgage_payment_grid_anchored_to_start_date_not_as_of_date():
+    # Regression test: as_of_date (2026-08-14) is NOT on the payment grid,
+    # which is anchored at start_date (the 15th of each month). The grid
+    # must be built from start_date and then filtered to dates strictly
+    # after as_of_date, not stepped forward from as_of_date itself — the
+    # latter would round the period count up and produce a final payment
+    # date past the contractual maturity_date.
+    mortgage = Mortgage(
+        instrument_id="MTGGRID",
+        currency="EUR",
+        notional=120_000,
+        start_date=date(2020, 1, 15),
+        maturity_date=date(2026, 9, 15),
+        rate_type="fixed",
+        fixed_rate=0.04,
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    as_of_date = date(2026, 8, 14)
+    flows = mortgage_cash_flows(mortgage, as_of_date)
+
+    assert len(flows) > 0
+    for f in flows:
+        assert f.date <= mortgage.maturity_date
+        assert f.date.day == 15
+    # Two remaining monthly periods after 2026-08-14: 2026-08-15, 2026-09-15.
+    dates = sorted({f.date for f in flows})
+    assert dates == [date(2026, 8, 15), date(2026, 9, 15)]
 
 
 def test_mortgage_zero_percent_uses_straight_line_amortization():
