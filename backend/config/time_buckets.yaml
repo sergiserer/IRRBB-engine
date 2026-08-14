@@ -1,0 +1,58 @@
+buckets:
+  - name: overnight
+    lower_days: 0
+    upper_days: 1
+  - name: 1d_1m
+    lower_days: 1
+    upper_days: 30
+  - name: 1m_3m
+    lower_days: 30
+    upper_days: 90
+  - name: 3m_6m
+    lower_days: 90
+    upper_days: 180
+  - name: 6m_9m
+    lower_days: 180
+    upper_days: 270
+  - name: 9m_1y
+    lower_days: 270
+    upper_days: 365
+  - name: 1y_1_5y
+    lower_days: 365
+    upper_days: 548
+  - name: 1_5y_2y
+    lower_days: 548
+    upper_days: 730
+  - name: 2y_3y
+    lower_days: 730
+    upper_days: 1095
+  - name: 3y_4y
+    lower_days: 1095
+    upper_days: 1460
+  - name: 4y_5y
+    lower_days: 1460
+    upper_days: 1825
+  - name: 5y_6y
+    lower_days: 1825
+    upper_days: 2190
+  - name: 6y_7y
+    lower_days: 2190
+    upper_days: 2555
+  - name: 7y_8y
+    lower_days: 2555
+    upper_days: 2920
+  - name: 8y_9y
+    lower_days: 2920
+    upper_days: 3285
+  - name: 9y_10y
+    lower_days: 3285
+    upper_days: 3650
+  - name: 10y_15y
+    lower_days: 3650
+    upper_days: 5475
+  - name: 15y_20y
+    lower_days: 5475
+    upper_days: 7300
+  - name: over_20y
+    lower_days: 7300
+    upper_days: null
