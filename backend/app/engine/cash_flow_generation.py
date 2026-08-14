@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import date
 from typing import List
 
+import pandas as pd
+
 from app.domain.cash_flow import CashFlow, Side
-from app.domain.instruments import Instrument, NonMaturingDeposit, TermDeposit
+from app.domain.instruments import Bond, Instrument, IssuedDebt, NonMaturingDeposit, TermDeposit
 
 
 def nmd_cash_flows(nmd: NonMaturingDeposit, as_of_date: date) -> List[CashFlow]:
@@ -64,3 +66,85 @@ def floating_repricing_cash_flow(instrument: Instrument, as_of_date: date, side:
             side=side,
         )
     ]
+
+
+def _fixed_coupon_schedule(
+    instrument_id: str,
+    currency: str,
+    notional: float,
+    start_date: date,
+    maturity_date: date,
+    fixed_rate: float,
+    coupon_frequency_months: int,
+    as_of_date: date,
+    side: Side,
+) -> List[CashFlow]:
+    """Assumes an exact integer number of coupon periods between
+    start_date and maturity_date (true for the Fase 1 synthetic data); no
+    stub-period handling in Fase 2."""
+    if maturity_date <= as_of_date:
+        return []
+    coupon = notional * fixed_rate * (coupon_frequency_months / 12)
+    step = pd.DateOffset(months=coupon_frequency_months)
+    maturity_ts = pd.Timestamp(maturity_date)
+    current = pd.Timestamp(start_date) + step
+
+    flows: List[CashFlow] = []
+    while current <= maturity_ts:
+        cf_date = current.date()
+        if cf_date > as_of_date:
+            flows.append(
+                CashFlow(
+                    instrument_id=instrument_id,
+                    currency=currency,
+                    date=cf_date,
+                    amount=coupon,
+                    flow_type="interest",
+                    side=side,
+                )
+            )
+        current += step
+
+    flows.append(
+        CashFlow(
+            instrument_id=instrument_id,
+            currency=currency,
+            date=maturity_date,
+            amount=notional,
+            flow_type="principal",
+            side=side,
+        )
+    )
+    return flows
+
+
+def bond_cash_flows(bond: Bond, as_of_date: date) -> List[CashFlow]:
+    if bond.rate_type == "floating":
+        return floating_repricing_cash_flow(bond, as_of_date, side="asset")
+    return _fixed_coupon_schedule(
+        bond.instrument_id,
+        bond.currency,
+        bond.notional,
+        bond.start_date,
+        bond.maturity_date,
+        bond.fixed_rate,
+        bond.coupon_frequency_months,
+        as_of_date,
+        side="asset",
+    )
+
+
+def issued_debt_cash_flows(debt: IssuedDebt, as_of_date: date) -> List[CashFlow]:
+    if debt.rate_type == "floating":
+        return floating_repricing_cash_flow(debt, as_of_date, side="liability")
+    return _fixed_coupon_schedule(
+        debt.instrument_id,
+        debt.currency,
+        debt.notional,
+        debt.start_date,
+        debt.maturity_date,
+        debt.fixed_rate,
+        debt.coupon_frequency_months,
+        as_of_date,
+        side="liability",
+    )

@@ -2,9 +2,11 @@ from datetime import date
 
 import pytest
 
-from app.domain.instruments import Bond, Mortgage, NonMaturingDeposit, TermDeposit
+from app.domain.instruments import Bond, IssuedDebt, Mortgage, NonMaturingDeposit, TermDeposit
 from app.engine.cash_flow_generation import (
+    bond_cash_flows,
     floating_repricing_cash_flow,
+    issued_debt_cash_flows,
     nmd_cash_flows,
     term_deposit_cash_flows,
 )
@@ -104,3 +106,77 @@ def test_floating_repricing_cash_flow_matured_returns_empty():
     )
     flows = floating_repricing_cash_flow(bond, date(2026, 8, 14), side="asset")
     assert flows == []
+
+
+def test_bond_fixed_coupon_schedule_reference_case():
+    bond = Bond(
+        instrument_id="BND001",
+        currency="EUR",
+        notional=1_000_000,
+        start_date=date(2021, 3, 1),
+        maturity_date=date(2031, 3, 1),
+        rate_type="fixed",
+        fixed_rate=0.021,
+        coupon_frequency_months=12,
+    )
+    flows = bond_cash_flows(bond, date(2026, 8, 14))
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    principal_flows = [f for f in flows if f.flow_type == "principal"]
+
+    # Coupon dates forward from 2021-03-01 every 12 months: ...,2026-03-01
+    # (before as_of, excluded), 2027-03-01 .. 2031-03-01 (5 remaining).
+    assert len(interest_flows) == 5
+    assert [f.date for f in interest_flows] == [
+        date(2027, 3, 1),
+        date(2028, 3, 1),
+        date(2029, 3, 1),
+        date(2030, 3, 1),
+        date(2031, 3, 1),
+    ]
+    # coupon = 1,000,000 * 2.1% * (12/12) = 21,000.00
+    assert all(f.amount == pytest.approx(21_000.0) for f in interest_flows)
+
+    assert len(principal_flows) == 1
+    assert principal_flows[0].amount == 1_000_000
+    assert principal_flows[0].date == date(2031, 3, 1)
+    assert all(f.side == "asset" for f in flows)
+
+
+def test_bond_floating_delegates_to_repricing_flow():
+    bond = Bond(
+        instrument_id="BND002",
+        currency="EUR",
+        notional=500_000,
+        start_date=date(2020, 9, 15),
+        maturity_date=date(2028, 9, 15),
+        rate_type="floating",
+        spread=0.005,
+        reference_index="EURIBOR_6M",
+        repricing_frequency_months=6,
+        next_repricing_date=date(2027, 3, 15),
+        coupon_frequency_months=6,
+    )
+    flows = bond_cash_flows(bond, date(2026, 8, 14))
+    assert len(flows) == 1
+    assert flows[0].date == date(2027, 3, 15)
+    assert flows[0].amount == 500_000
+    assert flows[0].side == "asset"
+
+
+def test_issued_debt_fixed_coupon_schedule_side_is_liability():
+    debt = IssuedDebt(
+        instrument_id="ISD001",
+        currency="EUR",
+        notional=2_000_000,
+        start_date=date(2022, 1, 10),
+        maturity_date=date(2027, 1, 10),
+        rate_type="fixed",
+        fixed_rate=0.028,
+        coupon_frequency_months=12,
+    )
+    flows = issued_debt_cash_flows(debt, date(2026, 8, 14))
+    principal_flows = [f for f in flows if f.flow_type == "principal"]
+    assert all(f.side == "liability" for f in flows)
+    assert len(principal_flows) == 1
+    assert principal_flows[0].amount == 2_000_000
+    assert principal_flows[0].date == date(2027, 1, 10)
