@@ -2,8 +2,12 @@ from datetime import date
 
 import pytest
 
-from app.domain.instruments import NonMaturingDeposit, TermDeposit
-from app.engine.cash_flow_generation import nmd_cash_flows, term_deposit_cash_flows
+from app.domain.instruments import Bond, Mortgage, NonMaturingDeposit, TermDeposit
+from app.engine.cash_flow_generation import (
+    floating_repricing_cash_flow,
+    nmd_cash_flows,
+    term_deposit_cash_flows,
+)
 
 
 def test_nmd_cash_flow_lands_on_as_of_date():
@@ -57,4 +61,46 @@ def test_term_deposit_matured_returns_empty():
         fixed_rate=0.028,
     )
     flows = term_deposit_cash_flows(deposit, date(2027, 8, 1))
+    assert flows == []
+
+
+def test_floating_repricing_cash_flow_reference_case():
+    mortgage = Mortgage(
+        instrument_id="MTG002",
+        currency="EUR",
+        notional=180_000,
+        start_date=date(2022, 6, 1),
+        maturity_date=date(2052, 6, 1),
+        rate_type="floating",
+        spread=0.012,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2027, 6, 1),
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    flows = floating_repricing_cash_flow(mortgage, date(2026, 8, 14), side="asset")
+    assert len(flows) == 1
+    cf = flows[0]
+    assert cf.amount == 180_000
+    assert cf.date == date(2027, 6, 1)
+    assert cf.flow_type == "principal"
+    assert cf.side == "asset"
+
+
+def test_floating_repricing_cash_flow_matured_returns_empty():
+    bond = Bond(
+        instrument_id="BND999",
+        currency="EUR",
+        notional=500_000,
+        start_date=date(2020, 1, 1),
+        maturity_date=date(2026, 1, 1),
+        rate_type="floating",
+        spread=0.005,
+        reference_index="EURIBOR_6M",
+        repricing_frequency_months=6,
+        next_repricing_date=date(2025, 7, 1),
+        coupon_frequency_months=6,
+    )
+    flows = floating_repricing_cash_flow(bond, date(2026, 8, 14), side="asset")
     assert flows == []
