@@ -29,6 +29,8 @@ def _validate_rate_fields(
 class Instrument(BaseModel):
     instrument_id: str
     currency: str = Field(min_length=3, max_length=3)
+    # notional is the outstanding principal as of the report's as_of_date,
+    # not the origination/issuance amount.
     notional: float = Field(gt=0)
     start_date: date
     maturity_date: date
@@ -74,6 +76,8 @@ class TermDeposit(Instrument):
 class NonMaturingDeposit(BaseModel):
     instrument_id: str
     currency: str = Field(min_length=3, max_length=3)
+    # notional is the outstanding balance as of the report's as_of_date,
+    # not the origination/issuance amount.
     notional: float = Field(gt=0)
     as_of_date: date
     rate: float = Field(ge=0)

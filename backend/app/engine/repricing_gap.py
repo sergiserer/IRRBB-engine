@@ -60,7 +60,13 @@ def build_gap_report(
     balance_sheet: BalanceSheet, as_of_date: date, buckets: List[TimeBucket]
 ) -> GapReport:
     """Aggregates principal cash flows only — interest cash flows feed NII
-    projection (Fase 6), not the repricing/EVE-style principal gap."""
+    projection (Fase 6), not the repricing/EVE-style principal gap.
+
+    Sums cf.amount regardless of cf.currency: the caller is responsible
+    for pre-filtering balance_sheet to a single currency (e.g. via
+    BalanceSheet.by_currency()) before calling this function if the
+    balance sheet spans multiple currencies, since IRRBB is computed per
+    material currency."""
     flows = generate_all_cash_flows(balance_sheet, as_of_date)
     totals = {bucket.name: {"asset": 0.0, "liability": 0.0} for bucket in buckets}
     for cf in flows:
