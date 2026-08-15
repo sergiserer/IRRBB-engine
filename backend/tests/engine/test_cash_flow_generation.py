@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from app.domain.instruments import Bond, IssuedDebt, Mortgage, NonMaturingDeposit, TermDeposit
+from app.domain.instruments import Bond, IssuedDebt, Leg, Mortgage, NonMaturingDeposit, Swap, TermDeposit
 from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.cash_flow_generation import (
     bond_cash_flows,
@@ -10,6 +10,7 @@ from app.engine.cash_flow_generation import (
     issued_debt_cash_flows,
     mortgage_cash_flows,
     nmd_cash_flows,
+    swap_leg_cash_flows,
     term_deposit_cash_flows,
 )
 
@@ -501,3 +502,37 @@ def test_mortgage_floating_without_curve_keeps_phase2_behaviour():
     assert len(flows) == 1
     assert flows[0].date == date(2027, 6, 1)
     assert flows[0].amount == 180_000
+
+
+def _reference_swap() -> Swap:
+    # notional 1,000,000, 2 annual periods, as_of_date == start_date
+    # (same dates/curve as the bond/mortgage Fase 3 fixtures above).
+    return Swap(
+        instrument_id="SWPFWD",
+        currency="EUR",
+        notional=1_000_000,
+        start_date=date(2025, 1, 1),
+        maturity_date=date(2027, 1, 1),
+        payment_frequency_months=12,
+        pay_leg=Leg(rate_type="fixed", fixed_rate=0.05),
+        receive_leg=Leg(rate_type="floating", spread=0.01, reference_index="EURIBOR_12M"),
+    )
+
+
+def test_swap_leg_cash_flows_fixed_leg_reference_case():
+    swap = _reference_swap()
+    flows = swap_leg_cash_flows(swap, swap.pay_leg, date(2025, 1, 1), _reference_curve())
+    assert [f.date for f in flows] == [date(2026, 1, 1), date(2027, 1, 1)]
+    # 1,000,000 * 5% * (12/12) = 50,000 each period, no principal exchange.
+    assert all(f.amount == pytest.approx(50_000.0) for f in flows)
+    assert all(f.flow_type == "interest" for f in flows)
+
+
+def test_swap_leg_cash_flows_floating_leg_reference_case():
+    swap = _reference_swap()
+    flows = swap_leg_cash_flows(swap, swap.receive_leg, date(2025, 1, 1), _reference_curve())
+    flows = sorted(flows, key=lambda f: f.date)
+    assert [f.date for f in flows] == [date(2026, 1, 1), date(2027, 1, 1)]
+    # Same forward rates as the floating bond fixture: 0.06 and 0.0800952380952382
+    assert flows[0].amount == pytest.approx(60_000.0)
+    assert flows[1].amount == pytest.approx(80_095.23809523821, rel=1e-9)

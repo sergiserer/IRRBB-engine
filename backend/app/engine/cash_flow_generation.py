@@ -6,7 +6,7 @@ from typing import List
 import pandas as pd
 
 from app.domain.cash_flow import CashFlow, Side
-from app.domain.instruments import Bond, Instrument, IssuedDebt, Mortgage, NonMaturingDeposit, TermDeposit
+from app.domain.instruments import Bond, Instrument, IssuedDebt, Leg, Mortgage, NonMaturingDeposit, Swap, TermDeposit
 from app.domain.yield_curve import YieldCurve
 
 
@@ -330,4 +330,50 @@ def mortgage_cash_flows(
             )
         )
         period_start = cf_date
+    return flows
+
+
+def swap_leg_cash_flows(
+    swap: Swap, leg: Leg, as_of_date: date, yield_curve: YieldCurve
+) -> List[CashFlow]:
+    """Coupon-only schedule (vanilla swap: no principal exchange) on
+    swap.notional, using swap.payment_frequency_months as the shared
+    grid for both legs (the domain model has one frequency, not one per
+    leg). Fixed leg: constant leg.fixed_rate. Floating leg: forward rate
+    per period + leg.spread, same derivation as _floating_coupon_schedule.
+
+    side is required by CashFlow but not meaningful for a swap leg in
+    isolation — swaps are netted directly into EVE by the caller
+    (app.engine.eve.swap_pv), not routed through the asset/liability
+    bucket system, so it is set to 'asset' as a placeholder and ignored."""
+    if swap.maturity_date <= as_of_date:
+        return []
+    step = pd.DateOffset(months=swap.payment_frequency_months)
+    maturity_ts = pd.Timestamp(swap.maturity_date)
+    period_start = pd.Timestamp(swap.start_date)
+    current = period_start + step
+
+    flows: List[CashFlow] = []
+    while current <= maturity_ts:
+        cf_date = current.date()
+        if cf_date > as_of_date:
+            if leg.rate_type == "fixed":
+                rate = leg.fixed_rate
+            else:
+                t1 = max(0.0, (period_start.date() - as_of_date).days / 365)
+                t2 = (cf_date - as_of_date).days / 365
+                rate = yield_curve.forward_rate(t1, t2) + leg.spread
+            coupon = swap.notional * rate * (swap.payment_frequency_months / 12)
+            flows.append(
+                CashFlow(
+                    instrument_id=swap.instrument_id,
+                    currency=swap.currency,
+                    date=cf_date,
+                    amount=coupon,
+                    flow_type="interest",
+                    side="asset",
+                )
+            )
+        period_start = current
+        current += step
     return flows
