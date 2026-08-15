@@ -441,3 +441,63 @@ def test_issued_debt_floating_with_curve_side_is_liability():
     interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
     assert interest_flows[0].amount == pytest.approx(60_000.0)
     assert interest_flows[1].amount == pytest.approx(80_095.23809523821, rel=1e-9)
+
+
+def test_mortgage_floating_with_curve_recasts_payment_each_period():
+    # notional 100,000, 2 annual periods, spread 1%, as_of_date == start_date.
+    # Period 1: rate = forward_rate(0,1) + 0.01 = 0.06
+    #   payment = 100,000 * 0.06 / (1 - 1.06^-2) = 54,543.68932038834
+    #   interest = 100,000 * 0.06 = 6,000.0, principal = 48,543.68932038833
+    # Period 2 (n=1, balance=51,456.31067961167):
+    #   rate = forward_rate(1,2) + 0.01 = 0.0800952380952382
+    #   interest = 51,456.31067961167 * rate = 4,121.405455386045
+    #   principal = balance (fully amortizes) = 51,456.310679611684
+    mortgage = Mortgage(
+        instrument_id="MTGFWD",
+        currency="EUR",
+        notional=100_000,
+        start_date=date(2025, 1, 1),
+        maturity_date=date(2027, 1, 1),
+        rate_type="floating",
+        spread=0.01,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2026, 1, 1),
+        amortization_type="french",
+        payment_frequency_months=12,
+    )
+    as_of_date = date(2025, 1, 1)
+    flows = mortgage_cash_flows(mortgage, as_of_date, yield_curve=_reference_curve())
+
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    principal_flows = sorted([f for f in flows if f.flow_type == "principal"], key=lambda f: f.date)
+
+    assert [f.date for f in interest_flows] == [date(2026, 1, 1), date(2027, 1, 1)]
+    assert interest_flows[0].amount == pytest.approx(6_000.0)
+    assert interest_flows[1].amount == pytest.approx(4_121.405455386045, rel=1e-9)
+    assert principal_flows[0].amount == pytest.approx(48_543.68932038833, rel=1e-9)
+    assert principal_flows[1].amount == pytest.approx(51_456.310679611684, rel=1e-9)
+    # Fully amortizes: total principal repaid equals the original notional.
+    assert sum(f.amount for f in principal_flows) == pytest.approx(100_000.0)
+    assert all(f.side == "asset" for f in flows)
+
+
+def test_mortgage_floating_without_curve_keeps_phase2_behaviour():
+    mortgage = Mortgage(
+        instrument_id="MTG002",
+        currency="EUR",
+        notional=180_000,
+        start_date=date(2022, 6, 1),
+        maturity_date=date(2052, 6, 1),
+        rate_type="floating",
+        spread=0.012,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2027, 6, 1),
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    flows = mortgage_cash_flows(mortgage, date(2026, 8, 14))
+    assert len(flows) == 1
+    assert flows[0].date == date(2027, 6, 1)
+    assert flows[0].amount == 180_000

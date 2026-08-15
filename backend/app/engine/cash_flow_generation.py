@@ -250,7 +250,9 @@ def issued_debt_cash_flows(
     )
 
 
-def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
+def mortgage_cash_flows(
+    mortgage: Mortgage, as_of_date: date, yield_curve: YieldCurve | None = None
+) -> List[CashFlow]:
     """Assumes an exact integer number of payment periods between
     start_date and maturity_date (same assumption as _fixed_coupon_schedule);
     no stub-period handling in Fase 2.
@@ -260,8 +262,18 @@ def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
     is not generally on that grid. balance starts from mortgage.notional,
     which represents the outstanding principal as of as_of_date (not the
     origination amount) — only dates falling strictly after as_of_date are
-    emitted."""
-    if mortgage.rate_type == "floating":
+    emitted.
+
+    When rate_type == 'floating' and a yield_curve is supplied, the
+    payment is recast every period using that period's forward rate
+    (yield_curve.forward_rate(t1, t2) + spread) instead of a single fixed
+    period_rate — this fully amortizes by construction (the final
+    period's annuity formula with n=1 always pays off the remaining
+    balance) and sidesteps tracking discrete reset dates separately from
+    payment dates. Documented Fase 3 simplification: this implicitly lets
+    the rate move every payment date, not just at
+    repricing_frequency_months boundaries."""
+    if mortgage.rate_type == "floating" and yield_curve is None:
         return floating_repricing_cash_flow(mortgage, as_of_date, side="asset")
     if mortgage.maturity_date <= as_of_date:
         return []
@@ -275,17 +287,25 @@ def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
         grid_dates.append(current.date())
         current += step
     remaining_dates = [d for d in grid_dates if d > as_of_date]
-    n = len(remaining_dates)
-
-    period_rate = mortgage.fixed_rate * (freq / 12)
-    if period_rate == 0:
-        payment = mortgage.notional / n
-    else:
-        payment = mortgage.notional * period_rate / (1 - (1 + period_rate) ** -n)
+    n_total = len(remaining_dates)
 
     flows: List[CashFlow] = []
     balance = mortgage.notional
-    for cf_date in remaining_dates:
+    period_start = mortgage.start_date
+    for i, cf_date in enumerate(remaining_dates):
+        n_remaining = n_total - i
+        if mortgage.rate_type == "floating":
+            t1 = max(0.0, (period_start - as_of_date).days / 365)
+            t2 = (cf_date - as_of_date).days / 365
+            period_rate = yield_curve.forward_rate(t1, t2) + mortgage.spread
+        else:
+            period_rate = mortgage.fixed_rate * (freq / 12)
+
+        if period_rate == 0:
+            payment = balance / n_remaining
+        else:
+            payment = balance * period_rate / (1 - (1 + period_rate) ** -n_remaining)
+
         interest = balance * period_rate
         principal = payment - interest
         balance -= principal
@@ -309,4 +329,5 @@ def mortgage_cash_flows(mortgage: Mortgage, as_of_date: date) -> List[CashFlow]:
                 side="asset",
             )
         )
+        period_start = cf_date
     return flows
