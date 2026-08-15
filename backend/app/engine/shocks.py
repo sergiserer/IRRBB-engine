@@ -13,6 +13,7 @@ from app.engine.eve import EVEResult, compute_eve
 @dataclass
 class ShockScenarioResult:
     scenario: str
+    base_eve: float
     eve_result: EVEResult
     delta_eve: float
     # EBA convention: base_eve - eve_result.eve, so a positive delta_eve
@@ -38,6 +39,7 @@ def run_eba_shock_scenarios(
         results.append(
             ShockScenarioResult(
                 scenario=scenario,
+                base_eve=base_eve,
                 eve_result=eve_result,
                 delta_eve=base_eve - eve_result.eve,
             )

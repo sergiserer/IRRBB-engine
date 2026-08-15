@@ -24,6 +24,12 @@ def test_run_eba_shock_scenarios_returns_all_six_scenarios_in_order():
     results = run_eba_shock_scenarios(balance_sheet, AS_OF_DATE, base_curve, "EUR", _config())
     assert [r.scenario for r in results] == SCENARIOS
 
+    expected_base_eve = compute_eve(balance_sheet, AS_OF_DATE, base_curve).eve
+    assert all(r.base_eve == pytest.approx(expected_base_eve) for r in results)
+    # base_eve is the same value repeated across all 6 results, not
+    # recomputed per-scenario.
+    assert len({r.base_eve for r in results}) == 1
+
 
 def test_parallel_shocks_move_eve_in_opposite_directions_reference_case():
     # Flat 0% base curve: EBA parallel_up/down (Delta(t) constant across
