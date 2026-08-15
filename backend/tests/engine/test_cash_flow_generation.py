@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 
 from app.domain.instruments import Bond, IssuedDebt, Mortgage, NonMaturingDeposit, TermDeposit
+from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.cash_flow_generation import (
     bond_cash_flows,
     floating_repricing_cash_flow,
@@ -11,6 +12,12 @@ from app.engine.cash_flow_generation import (
     nmd_cash_flows,
     term_deposit_cash_flows,
 )
+
+
+def _reference_curve() -> YieldCurve:
+    # Same curve used across Phase 3 reference cases: rate_at(1)=0.05,
+    # rate_at(2)=0.06 (interpolated), forward_rate(1,2)=0.070095238095238095
+    return YieldCurve([CurvePoint(tenor_years=1.0, rate=0.05), CurvePoint(tenor_years=3.0, rate=0.07)])
 
 
 def test_nmd_cash_flow_lands_on_as_of_date():
@@ -356,3 +363,81 @@ def test_mortgage_zero_percent_uses_straight_line_amortization():
     assert sum(f.amount for f in principal_flows) == pytest.approx(100_000.0)
     # No NaN values
     assert all(not f.amount != f.amount for f in flows)  # NaN != NaN is True
+
+
+def test_bond_floating_with_curve_projects_full_coupon_schedule():
+    # as_of_date == start_date so both coupon periods are clean 1-year,
+    # 2-year points on the reference curve (no leap days: 2025 and 2026
+    # are not leap years).
+    bond = Bond(
+        instrument_id="BNDFWD",
+        currency="EUR",
+        notional=1_000_000,
+        start_date=date(2025, 1, 1),
+        maturity_date=date(2027, 1, 1),
+        rate_type="floating",
+        spread=0.01,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2026, 1, 1),
+        coupon_frequency_months=12,
+    )
+    as_of_date = date(2025, 1, 1)
+    flows = bond_cash_flows(bond, as_of_date, yield_curve=_reference_curve())
+
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    principal_flows = [f for f in flows if f.flow_type == "principal"]
+
+    assert [f.date for f in interest_flows] == [date(2026, 1, 1), date(2027, 1, 1)]
+    # Period 1: forward_rate(0,1) + spread = 0.05 + 0.01 = 0.06 -> coupon = 1,000,000 * 0.06
+    assert interest_flows[0].amount == pytest.approx(60_000.0)
+    # Period 2: forward_rate(1,2) + spread = 0.070095238095238095 + 0.01
+    assert interest_flows[1].amount == pytest.approx(80_095.23809523821, rel=1e-9)
+
+    assert len(principal_flows) == 1
+    assert principal_flows[0].amount == 1_000_000
+    assert principal_flows[0].date == date(2027, 1, 1)
+    assert all(f.side == "asset" for f in flows)
+
+
+def test_bond_floating_without_curve_keeps_phase2_behaviour():
+    # Regression: yield_curve=None (the default) must reproduce Phase 2's
+    # bullet-principal-only behaviour exactly.
+    bond = Bond(
+        instrument_id="BND002",
+        currency="EUR",
+        notional=500_000,
+        start_date=date(2020, 9, 15),
+        maturity_date=date(2028, 9, 15),
+        rate_type="floating",
+        spread=0.005,
+        reference_index="EURIBOR_6M",
+        repricing_frequency_months=6,
+        next_repricing_date=date(2027, 3, 15),
+        coupon_frequency_months=6,
+    )
+    flows = bond_cash_flows(bond, date(2026, 8, 14))
+    assert len(flows) == 1
+    assert flows[0].date == date(2027, 3, 15)
+    assert flows[0].amount == 500_000
+
+
+def test_issued_debt_floating_with_curve_side_is_liability():
+    debt = IssuedDebt(
+        instrument_id="ISDFWD",
+        currency="EUR",
+        notional=1_000_000,
+        start_date=date(2025, 1, 1),
+        maturity_date=date(2027, 1, 1),
+        rate_type="floating",
+        spread=0.01,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2026, 1, 1),
+        coupon_frequency_months=12,
+    )
+    flows = issued_debt_cash_flows(debt, date(2025, 1, 1), yield_curve=_reference_curve())
+    assert all(f.side == "liability" for f in flows)
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    assert interest_flows[0].amount == pytest.approx(60_000.0)
+    assert interest_flows[1].amount == pytest.approx(80_095.23809523821, rel=1e-9)

@@ -7,6 +7,7 @@ import pandas as pd
 
 from app.domain.cash_flow import CashFlow, Side
 from app.domain.instruments import Bond, Instrument, IssuedDebt, Mortgage, NonMaturingDeposit, TermDeposit
+from app.domain.yield_curve import YieldCurve
 
 
 def nmd_cash_flows(nmd: NonMaturingDeposit, as_of_date: date) -> List[CashFlow]:
@@ -131,9 +132,80 @@ def _fixed_coupon_schedule(
     return flows
 
 
-def bond_cash_flows(bond: Bond, as_of_date: date) -> List[CashFlow]:
+def _floating_coupon_schedule(
+    instrument_id: str,
+    currency: str,
+    notional: float,
+    start_date: date,
+    maturity_date: date,
+    spread: float,
+    coupon_frequency_months: int,
+    as_of_date: date,
+    yield_curve: YieldCurve,
+    side: Side,
+) -> List[CashFlow]:
+    """Same coupon-date grid as _fixed_coupon_schedule, but each period's
+    rate is yield_curve.forward_rate(t1, t2) + spread instead of a stored
+    fixed_rate. t1 is clamped to 0 when the period's true start predates
+    as_of_date (no historical fixing data in this synthetic model —
+    documented Fase 3 simplification)."""
+    if maturity_date <= as_of_date:
+        return []
+    step = pd.DateOffset(months=coupon_frequency_months)
+    maturity_ts = pd.Timestamp(maturity_date)
+    period_start = pd.Timestamp(start_date)
+    current = period_start + step
+
+    flows: List[CashFlow] = []
+    while current <= maturity_ts:
+        cf_date = current.date()
+        if cf_date > as_of_date:
+            t1 = max(0.0, (period_start.date() - as_of_date).days / 365)
+            t2 = (cf_date - as_of_date).days / 365
+            rate = yield_curve.forward_rate(t1, t2) + spread
+            coupon = notional * rate * (coupon_frequency_months / 12)
+            flows.append(
+                CashFlow(
+                    instrument_id=instrument_id,
+                    currency=currency,
+                    date=cf_date,
+                    amount=coupon,
+                    flow_type="interest",
+                    side=side,
+                )
+            )
+        period_start = current
+        current += step
+
+    flows.append(
+        CashFlow(
+            instrument_id=instrument_id,
+            currency=currency,
+            date=maturity_date,
+            amount=notional,
+            flow_type="principal",
+            side=side,
+        )
+    )
+    return flows
+
+
+def bond_cash_flows(bond: Bond, as_of_date: date, yield_curve: YieldCurve | None = None) -> List[CashFlow]:
     if bond.rate_type == "floating":
-        return floating_repricing_cash_flow(bond, as_of_date, side="asset")
+        if yield_curve is None:
+            return floating_repricing_cash_flow(bond, as_of_date, side="asset")
+        return _floating_coupon_schedule(
+            bond.instrument_id,
+            bond.currency,
+            bond.notional,
+            bond.start_date,
+            bond.maturity_date,
+            bond.spread,
+            bond.coupon_frequency_months,
+            as_of_date,
+            yield_curve,
+            side="asset",
+        )
     return _fixed_coupon_schedule(
         bond.instrument_id,
         bond.currency,
@@ -147,9 +219,24 @@ def bond_cash_flows(bond: Bond, as_of_date: date) -> List[CashFlow]:
     )
 
 
-def issued_debt_cash_flows(debt: IssuedDebt, as_of_date: date) -> List[CashFlow]:
+def issued_debt_cash_flows(
+    debt: IssuedDebt, as_of_date: date, yield_curve: YieldCurve | None = None
+) -> List[CashFlow]:
     if debt.rate_type == "floating":
-        return floating_repricing_cash_flow(debt, as_of_date, side="liability")
+        if yield_curve is None:
+            return floating_repricing_cash_flow(debt, as_of_date, side="liability")
+        return _floating_coupon_schedule(
+            debt.instrument_id,
+            debt.currency,
+            debt.notional,
+            debt.start_date,
+            debt.maturity_date,
+            debt.spread,
+            debt.coupon_frequency_months,
+            as_of_date,
+            yield_curve,
+            side="liability",
+        )
     return _fixed_coupon_schedule(
         debt.instrument_id,
         debt.currency,
