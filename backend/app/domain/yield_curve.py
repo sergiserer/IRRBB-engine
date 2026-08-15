@@ -51,3 +51,19 @@ class YieldCurve:
             return 1.0
         r = self.rate_at(t)
         return 1.0 / (1.0 + r) ** t
+
+    def forward_rate(self, t1: float, t2: float) -> float:
+        """Forward rate for the period [t1, t2] implied by today's spot
+        curve, consistent with this class's discrete-annual-compounding
+        convention: F(t1, t2) = (DF(t1) / DF(t2)) ** (1 / (t2 - t1)) - 1.
+
+        Callers whose true period start predates as_of_date (no
+        historical rate-fixing data exists in this synthetic model) must
+        clamp t1 to 0 before calling — this reduces to rate_at(t2), i.e.
+        today's spot rate stands in for the in-progress stub period.
+        """
+        if t1 < 0:
+            raise ValueError("t1 must be >= 0")
+        if t2 <= t1:
+            raise ValueError("t2 must be > t1")
+        return (self.discount_factor(t1) / self.discount_factor(t2)) ** (1.0 / (t2 - t1)) - 1.0

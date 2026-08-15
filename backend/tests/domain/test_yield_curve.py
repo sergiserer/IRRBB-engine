@@ -58,3 +58,29 @@ def test_discount_factor_negative_time_raises():
 def test_yield_curve_requires_at_least_one_point():
     with pytest.raises(ValueError):
         YieldCurve([])
+
+
+def test_forward_rate_matches_bootstrapped_relationship():
+    curve = _curve()
+    # (1+R(2))^2 = (1+R(1))^1 * (1+F(1,2))^1
+    # (1.06)^2 / 1.05 - 1 = 1.1236/1.05 - 1 = 0.070095238095238095...
+    assert curve.forward_rate(1.0, 2.0) == pytest.approx(0.070095238095238095, rel=1e-12)
+
+
+def test_forward_rate_from_zero_equals_spot_rate():
+    curve = _curve()
+    # F(0, t) reduces to rate_at(t) since DF(0) == 1.0
+    assert curve.forward_rate(0.0, 1.0) == pytest.approx(0.05)
+    assert curve.forward_rate(0.0, 3.0) == pytest.approx(0.07)
+
+
+def test_forward_rate_zero_length_period_raises():
+    curve = _curve()
+    with pytest.raises(ValueError):
+        curve.forward_rate(2.0, 2.0)
+
+
+def test_forward_rate_negative_t1_raises():
+    curve = _curve()
+    with pytest.raises(ValueError):
+        curve.forward_rate(-1.0, 1.0)
