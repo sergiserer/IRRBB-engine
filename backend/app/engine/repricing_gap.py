@@ -7,6 +7,7 @@ from typing import List
 from app.domain.balance_sheet import BalanceSheet
 from app.domain.cash_flow import CashFlow
 from app.domain.time_buckets import TimeBucket, bucket_for
+from app.domain.yield_curve import YieldCurve
 from app.engine.cash_flow_generation import (
     bond_cash_flows,
     issued_debt_cash_flows,
@@ -16,16 +17,26 @@ from app.engine.cash_flow_generation import (
 )
 
 
-def generate_all_cash_flows(balance_sheet: BalanceSheet, as_of_date: date) -> List[CashFlow]:
+def generate_all_cash_flows(
+    balance_sheet: BalanceSheet, as_of_date: date, yield_curve: YieldCurve | None = None
+) -> List[CashFlow]:
     """Dispatches to the per-type generators. Swaps are intentionally
-    skipped — see the Fase 2 design spec's non-goals."""
+    skipped — see app.engine.eve.compute_eve for how swaps are netted
+    into EVE separately (they have no principal cash flows to slot).
+
+    yield_curve is threaded through to the floating-rate branches of
+    bond_cash_flows/issued_debt_cash_flows/mortgage_cash_flows: None
+    (the default, used by build_gap_report) preserves Fase 2's
+    bullet-principal-only behaviour; a supplied curve switches those
+    branches to full forward-rate-projected schedules (Fase 3, used by
+    app.engine.eve.compute_eve)."""
     flows: List[CashFlow] = []
     for mortgage in balance_sheet.mortgages:
-        flows.extend(mortgage_cash_flows(mortgage, as_of_date))
+        flows.extend(mortgage_cash_flows(mortgage, as_of_date, yield_curve))
     for bond in balance_sheet.bonds:
-        flows.extend(bond_cash_flows(bond, as_of_date))
+        flows.extend(bond_cash_flows(bond, as_of_date, yield_curve))
     for debt in balance_sheet.issued_debt:
-        flows.extend(issued_debt_cash_flows(debt, as_of_date))
+        flows.extend(issued_debt_cash_flows(debt, as_of_date, yield_curve))
     for deposit in balance_sheet.term_deposits:
         flows.extend(term_deposit_cash_flows(deposit, as_of_date))
     for nmd in balance_sheet.nmd:
