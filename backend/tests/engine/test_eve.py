@@ -1,12 +1,16 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 
+from app.data.loaders import load_balance_sheet
 from app.domain.balance_sheet import BalanceSheet
 from app.domain.cash_flow import CashFlow
 from app.domain.instruments import Bond, Leg, Swap, TermDeposit
 from app.domain.yield_curve import CurvePoint, YieldCurve
+from app.engine.cash_flow_generation import mortgage_cash_flows
 from app.engine.eve import compute_eve, pv, swap_pv
+from app.engine.repricing_gap import generate_all_cash_flows
 
 
 def _reference_curve() -> YieldCurve:
@@ -84,3 +88,49 @@ def test_compute_eve_small_balance_sheet_reference_case():
     assert result.pv_liabilities == pytest.approx(480_598.0776076895, rel=1e-9)
     assert result.swap_net_pv == pytest.approx(36_308.464289952506, rel=1e-9)
     assert result.eve == pytest.approx(574_134.1606062148, rel=1e-9)
+
+
+DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
+AS_OF_DATE = date(2026, 8, 14)  # same as test_repricing_gap.py: after every start_date, before any maturity
+
+
+def _flat_zero_curve() -> YieldCurve:
+    # A single point makes rate_at (and therefore discount_factor) flat
+    # everywhere -- DF(t) == 1.0 for all t > 0 -- so PV reduces to the
+    # undiscounted cash flow sum, which this test computes independently
+    # via the same generators compute_eve uses internally. This is the
+    # "hand-computed" reference case for the full synthetic balance
+    # sheet: trivial arithmetic (a sum), but genuine end-to-end wiring
+    # coverage across every instrument type and the swap netting path.
+    return YieldCurve([CurvePoint(tenor_years=1.0, rate=0.0)])
+
+
+def test_compute_eve_reconciles_with_independently_summed_cash_flows():
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    curve = _flat_zero_curve()
+
+    result = compute_eve(balance_sheet, AS_OF_DATE, curve)
+
+    flows = generate_all_cash_flows(balance_sheet, AS_OF_DATE, curve)
+    expected_assets = sum(f.amount for f in flows if f.side == "asset")
+    expected_liabilities = sum(f.amount for f in flows if f.side == "liability")
+    expected_swap_net_pv = sum(swap_pv(s, AS_OF_DATE, curve) for s in balance_sheet.swaps)
+
+    assert result.pv_assets == pytest.approx(expected_assets)
+    assert result.pv_liabilities == pytest.approx(expected_liabilities)
+    assert result.swap_net_pv == pytest.approx(expected_swap_net_pv)
+    assert result.eve == pytest.approx(expected_assets - expected_liabilities + expected_swap_net_pv)
+
+
+def test_compute_eve_floating_mortgage_fully_amortizes_under_curve():
+    # MTG002 (floating, notional 180,000): under a curve, its cash flows
+    # must fully amortize the notional regardless of the projected rate
+    # path -- a structural invariant of the recast-every-period annuity,
+    # independent of any specific curve.
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    mtg002 = next(m for m in balance_sheet.mortgages if m.instrument_id == "MTG002")
+
+    flows = mortgage_cash_flows(mtg002, AS_OF_DATE, yield_curve=_flat_zero_curve())
+    principal_total = sum(f.amount for f in flows if f.flow_type == "principal")
+
+    assert principal_total == pytest.approx(180_000.0)
