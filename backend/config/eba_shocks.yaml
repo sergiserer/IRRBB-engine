@@ -1,0 +1,17 @@
+# Prescribed IRRBB shock scenario parameters.
+# Source: BCBS d368 (Standardised Interest Rate Risk in the Banking
+# Book), Annex 2; also referenced by EBA RTS 2022/09. Magnitudes are the
+# commonly-cited secondary-source values for EUR — NOT yet verified
+# against the primary BCBS/EBA text. Same caveat as the Phase 3
+# discounting-convention note in docs/internal/DOCUMENTACION_TECNICA.md.
+#
+# The post-shock rate floor defined in Annex 2 (a tenor-dependent
+# minimum rate after applying the shock) is deliberately NOT modelled
+# here yet — documented simplification, to be added alongside primary-
+# text verification.
+decay_years: 4.0
+scenario_weights:
+  steepener: {short: -0.65, long: 0.90}
+  flattener: {short: 0.80, long: -0.60}
+currencies:
+  EUR: {parallel: 0.02, short: 0.025, long: 0.01}
