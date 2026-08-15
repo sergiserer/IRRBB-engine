@@ -7,6 +7,8 @@ from typing import Callable, Dict
 
 import yaml
 
+from app.domain.yield_curve import YieldCurve
+
 SCENARIOS = [
     "parallel_up",
     "parallel_down",
@@ -73,3 +75,25 @@ def shock_function(scenario: str, currency: str, config: ShockConfig) -> Callabl
 
     weights = config.scenario_weights[scenario]
     return lambda t: weights["short"] * d_short(t) + weights["long"] * d_long(t)
+
+
+class ShockedYieldCurve(YieldCurve):
+    """A YieldCurve that adds shock_fn(t) to a base curve's rate at every
+    tenor. Deliberately does NOT call YieldCurve.__init__ — the
+    points/tenors arrays it would build are never read, since rate_at is
+    overridden here, and discount_factor/forward_rate (inherited
+    unchanged from YieldCurve) both resolve rates through self.rate_at(t)
+    rather than the stored arrays. This makes the shock exact at any t
+    (no re-interpolation of a sampled shock), and keeps the discount/
+    forward math defined in exactly one place."""
+
+    def __init__(self, base: YieldCurve, shock_fn: Callable[[float], float]):
+        self._base = base
+        self._shock_fn = shock_fn
+
+    def rate_at(self, t: float) -> float:
+        return self._base.rate_at(t) + self._shock_fn(t)
+
+
+def apply_shock(base_curve: YieldCurve, scenario: str, currency: str, config: ShockConfig) -> YieldCurve:
+    return ShockedYieldCurve(base_curve, shock_function(scenario, currency, config))
