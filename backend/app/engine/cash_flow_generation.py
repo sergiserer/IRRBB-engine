@@ -264,8 +264,10 @@ def _fixed_mortgage_schedule(
     remaining period count gives the same numbers as computing it once,
     as long as the balance follows its own schedule with no unscheduled
     principal removed -- which is exactly the cpr_annual=0.0 case. So
-    every pre-Fase-5 caller (cpr_annual defaults to 0.0) sees
-    byte-identical output.
+    every pre-Fase-5 caller (cpr_annual defaults to 0.0) sees output
+    identical to floating-point tolerance (~1e-10) -- not literally
+    byte-identical, since the two computations sum operations in a
+    different order.
 
     When cpr_annual > 0, each period also pays smm_for_period(cpr_annual,
     payment_frequency_months) * (balance after that period's scheduled
@@ -275,6 +277,9 @@ def _fixed_mortgage_schedule(
     defining economic effect of prepayment risk (average-life
     shortening) that a per-period recast (constant maturity_date, no
     early payoff) would not capture."""
+    if n_total == 0:
+        return []
+
     freq = mortgage.payment_frequency_months
     period_rate = mortgage.fixed_rate * (freq / 12)
     balance = mortgage.notional

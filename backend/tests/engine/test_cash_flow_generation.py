@@ -633,6 +633,27 @@ def test_mortgage_floating_without_curve_keeps_phase2_behaviour():
     assert flows[0].amount == 180_000
 
 
+def test_mortgage_fixed_empty_payment_grid_returns_empty():
+    # Regression test: start_date=2024-01-01, maturity_date=2024-07-15,
+    # payment_frequency_months=12 -- the annual payment grid's first date
+    # (2025-01-01) falls AFTER maturity_date, so remaining_dates is empty
+    # even though the mortgage hasn't matured yet (as_of_date < maturity_date).
+    # Before this fix, _fixed_mortgage_schedule divided by n_total=0 here.
+    mortgage = Mortgage(
+        instrument_id="MTGEMPTY",
+        currency="EUR",
+        notional=100_000,
+        start_date=date(2024, 1, 1),
+        maturity_date=date(2024, 7, 15),
+        rate_type="fixed",
+        fixed_rate=0.05,
+        amortization_type="french",
+        payment_frequency_months=12,
+    )
+    flows = mortgage_cash_flows(mortgage, date(2024, 1, 1))
+    assert flows == []
+
+
 def _reference_swap() -> Swap:
     # notional 1,000,000, 2 annual periods, as_of_date == start_date
     # (same dates/curve as the bond/mortgage Fase 3 fixtures above).
