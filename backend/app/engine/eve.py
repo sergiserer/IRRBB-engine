@@ -46,13 +46,19 @@ class EVEResult:
         return self.pv_assets - self.pv_liabilities + self.swap_net_pv
 
 
-def compute_eve(balance_sheet: BalanceSheet, as_of_date: date, yield_curve: YieldCurve) -> EVEResult:
+def compute_eve(
+    balance_sheet: BalanceSheet, as_of_date: date, yield_curve: YieldCurve, cpr_annual: float = 0.0
+) -> EVEResult:
     """PV(assets) - PV(liabilities) + net swap PV under yield_curve.
     Discounts principal and interest cash flows (generate_all_cash_flows
     with a curve supplied projects floating instruments' full schedule —
     see Fase 3 design spec). NMD remains the Fase 2 overnight placeholder
-    (DF(0) = 1.0, undiscounted) pending Fase 5's decay model."""
-    flows = generate_all_cash_flows(balance_sheet, as_of_date, yield_curve)
+    (DF(0) = 1.0, undiscounted) pending Fase 5's decay model.
+
+    cpr_annual (Fase 5): constant CPR passed through to
+    generate_all_cash_flows — see its docstring. Default 0.0 preserves
+    Fase 3/4 behaviour exactly (no prepayment)."""
+    flows = generate_all_cash_flows(balance_sheet, as_of_date, yield_curve, cpr_annual)
     asset_flows = [cf for cf in flows if cf.side == "asset"]
     liability_flows = [cf for cf in flows if cf.side == "liability"]
     swap_net_pv = sum(swap_pv(swap, as_of_date, yield_curve) for swap in balance_sheet.swaps)

@@ -152,3 +152,22 @@ def test_compute_eve_floating_mortgage_pv_stays_within_notional_band_under_flat_
     mortgage_pv = pv(flows, AS_OF_DATE, flat_curve)
 
     assert 0.8 * mtg002.notional < mortgage_pv < 1.3 * mtg002.notional
+
+
+def test_compute_eve_with_cpr_annual_differs_from_without():
+    # MTG001 (fixed) is the only instrument affected by cpr_annual;
+    # prepayment shifts principal earlier in time, which must change
+    # both pv_assets and the overall eve versus the cpr_annual=0.0
+    # baseline under any curve with a nonzero rate.
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+
+    eve_without_cpr = compute_eve(balance_sheet, AS_OF_DATE, curve)
+    eve_with_cpr = compute_eve(balance_sheet, AS_OF_DATE, curve, cpr_annual=0.05)
+
+    assert eve_with_cpr.pv_assets != pytest.approx(eve_without_cpr.pv_assets)
+    assert eve_with_cpr.eve != pytest.approx(eve_without_cpr.eve)
+    # Liabilities and swap PV are unaffected -- cpr_annual only touches
+    # mortgages, which are always assets.
+    assert eve_with_cpr.pv_liabilities == pytest.approx(eve_without_cpr.pv_liabilities)
+    assert eve_with_cpr.swap_net_pv == pytest.approx(eve_without_cpr.swap_net_pv)
