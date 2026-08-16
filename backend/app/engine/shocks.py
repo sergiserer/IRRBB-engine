@@ -26,16 +26,21 @@ def run_eba_shock_scenarios(
     base_curve: YieldCurve,
     currency: str,
     config: ShockConfig,
+    cpr_annual: float = 0.0,
 ) -> List[ShockScenarioResult]:
     """Runs compute_eve under base_curve, then under each of the 6
     apply_shock(...) curves in SCENARIOS order. balance_sheet is assumed
     pre-filtered by currency by the caller, consistent with compute_eve's
-    existing convention (Phase 3: 'caller pre-filters by currency')."""
-    base_eve = compute_eve(balance_sheet, as_of_date, base_curve).eve
+    existing convention (Phase 3: 'caller pre-filters by currency').
+
+    cpr_annual (Fase 5): constant CPR passed through to every
+    compute_eve call (base and all 6 shocked curves) — see its
+    docstring. Default 0.0 preserves Fase 4 behaviour exactly."""
+    base_eve = compute_eve(balance_sheet, as_of_date, base_curve, cpr_annual).eve
     results: List[ShockScenarioResult] = []
     for scenario in SCENARIOS:
         shocked_curve = apply_shock(base_curve, scenario, currency, config)
-        eve_result = compute_eve(balance_sheet, as_of_date, shocked_curve)
+        eve_result = compute_eve(balance_sheet, as_of_date, shocked_curve, cpr_annual)
         results.append(
             ShockScenarioResult(
                 scenario=scenario,

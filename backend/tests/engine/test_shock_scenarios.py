@@ -70,3 +70,22 @@ def test_run_eba_shock_scenarios_flattener_reconciles_with_manual_apply_shock():
 
     assert flattener.eve_result.eve == pytest.approx(expected_eve_result.eve)
     assert flattener.delta_eve == pytest.approx(expected_base_eve - expected_eve_result.eve)
+
+
+def test_run_eba_shock_scenarios_threads_cpr_annual():
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    base_curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+    config = _config()
+
+    results_without_cpr = run_eba_shock_scenarios(balance_sheet, AS_OF_DATE, base_curve, "EUR", config)
+    results_with_cpr = run_eba_shock_scenarios(
+        balance_sheet, AS_OF_DATE, base_curve, "EUR", config, cpr_annual=0.05
+    )
+
+    assert results_with_cpr[0].base_eve != pytest.approx(results_without_cpr[0].base_eve)
+    # Every scenario (base + all 6 shocked curves) uses the same
+    # cpr_annual assumption -- confirm at least one shocked scenario's
+    # eve also differs, not just the base.
+    parallel_up_without = next(r for r in results_without_cpr if r.scenario == "parallel_up")
+    parallel_up_with = next(r for r in results_with_cpr if r.scenario == "parallel_up")
+    assert parallel_up_with.eve_result.eve != pytest.approx(parallel_up_without.eve_result.eve)
