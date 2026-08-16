@@ -297,7 +297,7 @@ def mortgage_cash_flows(
         if mortgage.rate_type == "floating":
             t1 = max(0.0, (period_start - as_of_date).days / 365)
             t2 = (cf_date - as_of_date).days / 365
-            period_rate = yield_curve.forward_rate(t1, t2) + mortgage.spread
+            period_rate = (yield_curve.forward_rate(t1, t2) + mortgage.spread) * (freq / 12)
         else:
             period_rate = mortgage.fixed_rate * (freq / 12)
 

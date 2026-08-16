@@ -483,6 +483,54 @@ def test_mortgage_floating_with_curve_recasts_payment_each_period():
     assert all(f.side == "asset" for f in flows)
 
 
+def test_mortgage_floating_with_curve_monthly_payment_deannualizes_rate():
+    # Regression test for the Fase 3 de-annualization bug: with monthly
+    # payments (freq=1), period_rate must be forward_rate(t1,t2) + spread
+    # scaled by (freq/12), same as the fixed-rate branch does. Both
+    # payment periods here (2024-01-01 -> 2024-02-01 -> 2024-03-01) fall
+    # entirely within [0, 1] years from as_of_date, where this curve's
+    # rate_at is flat at 5% (t <= first tenor of 1.0) -- so forward_rate
+    # is exactly 0.05 for both periods regardless of the exact t1/t2,
+    # making the annual rate = 0.05 + spread(0.01) = 0.06 for both
+    # periods, identical to test_mortgage_french_amortization_reference_case's
+    # fixed 6% case. Correctly de-annualized: period_rate = 0.06 * (1/12)
+    # = 0.005 -> first interest = 100,000 * 0.005 = 500.00. The bug (no
+    # de-annualization) would instead use period_rate = 0.06, an interest
+    # of 6,000.00 -- 12x too large.
+    mortgage = Mortgage(
+        instrument_id="MTGCURVEMONTHLY",
+        currency="EUR",
+        notional=100_000,
+        start_date=date(2024, 1, 1),
+        maturity_date=date(2024, 3, 1),
+        rate_type="floating",
+        spread=0.01,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2025, 1, 1),
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    as_of_date = date(2024, 1, 1)
+    flows = mortgage_cash_flows(mortgage, as_of_date, yield_curve=_reference_curve())
+
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    principal_flows = sorted([f for f in flows if f.flow_type == "principal"], key=lambda f: f.date)
+
+    assert [f.date for f in interest_flows] == [date(2024, 2, 1), date(2024, 3, 1)]
+    # First period interest is exactly balance * period_rate = 100,000 * 0.5% = 500.00
+    assert interest_flows[0].amount == pytest.approx(500.0)
+    # Annuity invariant: total principal repaid equals the original balance.
+    assert sum(f.amount for f in principal_flows) == pytest.approx(100_000.0)
+    # Each period's total payment (interest + principal) is constant --
+    # only true if both periods used the same (correctly de-annualized)
+    # period_rate, since both forward rates are 0.05 here.
+    payment_1 = interest_flows[0].amount + principal_flows[0].amount
+    payment_2 = interest_flows[1].amount + principal_flows[1].amount
+    assert payment_1 == pytest.approx(payment_2)
+    assert all(f.side == "asset" for f in flows)
+
+
 def test_mortgage_floating_without_curve_keeps_phase2_behaviour():
     mortgage = Mortgage(
         instrument_id="MTG002",

@@ -134,3 +134,21 @@ def test_compute_eve_floating_mortgage_fully_amortizes_under_curve():
     principal_total = sum(f.amount for f in flows if f.flow_type == "principal")
 
     assert principal_total == pytest.approx(180_000.0)
+
+
+def test_compute_eve_floating_mortgage_pv_stays_within_notional_band_under_flat_curve():
+    # Magnitude sanity invariant, independent of the amortization
+    # invariant above: a floating instrument's PV under a flat curve at a
+    # realistic rate must stay within a reasonable band of its notional
+    # -- it should not be a multiple of the notional. This is the
+    # invariant that would have caught the Fase 3 de-annualization bug
+    # instantly (the buggy PV came out at ~7.8x notional), unlike the
+    # amortization-only test above, which is blind to the rate level.
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    mtg002 = next(m for m in balance_sheet.mortgages if m.instrument_id == "MTG002")
+    flat_curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+
+    flows = mortgage_cash_flows(mtg002, AS_OF_DATE, yield_curve=flat_curve)
+    mortgage_pv = pv(flows, AS_OF_DATE, flat_curve)
+
+    assert 0.8 * mtg002.notional < mortgage_pv < 1.3 * mtg002.notional

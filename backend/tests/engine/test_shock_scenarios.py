@@ -44,8 +44,8 @@ def test_parallel_shocks_move_eve_in_opposite_directions_reference_case():
     parallel_up = next(r for r in results if r.scenario == "parallel_up")
     parallel_down = next(r for r in results if r.scenario == "parallel_down")
 
-    assert parallel_up.delta_eve == pytest.approx(-763236.9922993672, rel=1e-9)
-    assert parallel_down.delta_eve == pytest.approx(674451.7043335, rel=1e-9)
+    assert parallel_up.delta_eve == pytest.approx(-50207.892142506316, rel=1e-9)
+    assert parallel_down.delta_eve == pytest.approx(37531.942796862684, rel=1e-9)
     # Duration-mismatch sign check: a parallel-up and a parallel-down
     # shock must move EVE in opposite directions.
     assert parallel_up.delta_eve * parallel_down.delta_eve < 0
