@@ -86,3 +86,15 @@ def test_build_gap_report_unaffected_by_curve_threading():
     report = build_gap_report(balance_sheet, AS_OF_DATE, buckets)
     assert report.total_assets() == pytest.approx(balance_sheet.total_assets())
     assert report.total_liabilities() == pytest.approx(balance_sheet.total_liabilities())
+
+
+def test_generate_all_cash_flows_threads_cpr_annual_to_fixed_mortgages_only():
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    flows = generate_all_cash_flows(balance_sheet, AS_OF_DATE, cpr_annual=0.05)
+    prepayment_flows = [f for f in flows if f.flow_type == "prepayment"]
+
+    # MTG001 is the only fixed-rate mortgage in the synthetic data;
+    # MTG002 is floating (cpr_annual has no effect there), and no other
+    # instrument type in this balance sheet is mortgage-like.
+    assert len(prepayment_flows) > 0
+    assert all(f.instrument_id == "MTG001" for f in prepayment_flows)

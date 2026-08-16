@@ -18,7 +18,10 @@ from app.engine.cash_flow_generation import (
 
 
 def generate_all_cash_flows(
-    balance_sheet: BalanceSheet, as_of_date: date, yield_curve: YieldCurve | None = None
+    balance_sheet: BalanceSheet,
+    as_of_date: date,
+    yield_curve: YieldCurve | None = None,
+    cpr_annual: float = 0.0,
 ) -> List[CashFlow]:
     """Dispatches to the per-type generators. Swaps are intentionally
     skipped — see app.engine.eve.compute_eve for how swaps are netted
@@ -29,10 +32,17 @@ def generate_all_cash_flows(
     (the default, used by build_gap_report) preserves Fase 2's
     bullet-principal-only behaviour; a supplied curve switches those
     branches to full forward-rate-projected schedules (Fase 3, used by
-    app.engine.eve.compute_eve)."""
+    app.engine.eve.compute_eve).
+
+    cpr_annual (Fase 5) is threaded ONLY to mortgage_cash_flows (the
+    only generator with a prepayment model) — bonds, issued debt, term
+    deposits and NMDs have no prepayment/decay behaviour modelled yet.
+    build_gap_report calls this with the default 0.0, so it never
+    produces 'prepayment'-typed flows in this phase (see design spec's
+    "deuda técnica" note on repricing_gap.py's bucket filter)."""
     flows: List[CashFlow] = []
     for mortgage in balance_sheet.mortgages:
-        flows.extend(mortgage_cash_flows(mortgage, as_of_date, yield_curve))
+        flows.extend(mortgage_cash_flows(mortgage, as_of_date, yield_curve, cpr_annual))
     for bond in balance_sheet.bonds:
         flows.extend(bond_cash_flows(bond, as_of_date, yield_curve))
     for debt in balance_sheet.issued_debt:
