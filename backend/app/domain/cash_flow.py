@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
-FlowType = Literal["principal", "interest"]
+FlowType = Literal["principal", "interest", "prepayment"]
 Side = Literal["asset", "liability"]
 
 

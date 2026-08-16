@@ -7,6 +7,7 @@ import pandas as pd
 
 from app.domain.cash_flow import CashFlow, Side
 from app.domain.instruments import Bond, Instrument, IssuedDebt, Leg, Mortgage, NonMaturingDeposit, Swap, TermDeposit
+from app.domain.prepayment import smm_for_period
 from app.domain.yield_curve import YieldCurve
 
 
@@ -250,8 +251,90 @@ def issued_debt_cash_flows(
     )
 
 
+def _fixed_mortgage_schedule(
+    mortgage: Mortgage, remaining_dates: List[date], n_total: int, cpr_annual: float
+) -> List[CashFlow]:
+    """Fixed-rate amortization with an optional constant-CPR prepayment
+    overlay (Fase 5). payment_fixed is computed once from
+    mortgage.notional and n_total and held constant for the life of the
+    schedule -- the classic MBS/CPR cash-flow convention, not a
+    per-period recast. With cpr_annual == 0.0 this reproduces the
+    pre-Fase-5 per-period-recompute behaviour exactly: recomputing the
+    annuity payment every period from the then-current balance and
+    remaining period count gives the same numbers as computing it once,
+    as long as the balance follows its own schedule with no unscheduled
+    principal removed -- which is exactly the cpr_annual=0.0 case. So
+    every pre-Fase-5 caller (cpr_annual defaults to 0.0) sees
+    byte-identical output.
+
+    When cpr_annual > 0, each period also pays smm_for_period(cpr_annual,
+    payment_frequency_months) * (balance after that period's scheduled
+    principal) as unscheduled prepayment (flow_type='prepayment'). This
+    can pay the loan off before mortgage.maturity_date: the loop stops
+    emitting flows as soon as the balance is fully repaid, which is the
+    defining economic effect of prepayment risk (average-life
+    shortening) that a per-period recast (constant maturity_date, no
+    early payoff) would not capture."""
+    freq = mortgage.payment_frequency_months
+    period_rate = mortgage.fixed_rate * (freq / 12)
+    balance = mortgage.notional
+    if period_rate == 0:
+        payment_fixed = balance / n_total
+    else:
+        payment_fixed = balance * period_rate / (1 - (1 + period_rate) ** -n_total)
+    smm = smm_for_period(cpr_annual, freq) if cpr_annual > 0 else 0.0
+
+    flows: List[CashFlow] = []
+    for cf_date in remaining_dates:
+        interest = balance * period_rate
+        scheduled_principal = payment_fixed - interest
+        prepayment = smm * (balance - scheduled_principal)
+        payoff = balance - scheduled_principal - prepayment <= 0
+        if payoff:
+            scheduled_principal = min(scheduled_principal, balance)
+            prepayment = balance - scheduled_principal
+        balance -= scheduled_principal + prepayment
+        flows.append(
+            CashFlow(
+                instrument_id=mortgage.instrument_id,
+                currency=mortgage.currency,
+                date=cf_date,
+                amount=interest,
+                flow_type="interest",
+                side="asset",
+            )
+        )
+        flows.append(
+            CashFlow(
+                instrument_id=mortgage.instrument_id,
+                currency=mortgage.currency,
+                date=cf_date,
+                amount=scheduled_principal,
+                flow_type="principal",
+                side="asset",
+            )
+        )
+        if cpr_annual > 0:
+            flows.append(
+                CashFlow(
+                    instrument_id=mortgage.instrument_id,
+                    currency=mortgage.currency,
+                    date=cf_date,
+                    amount=prepayment,
+                    flow_type="prepayment",
+                    side="asset",
+                )
+            )
+        if payoff:
+            break
+    return flows
+
+
 def mortgage_cash_flows(
-    mortgage: Mortgage, as_of_date: date, yield_curve: YieldCurve | None = None
+    mortgage: Mortgage,
+    as_of_date: date,
+    yield_curve: YieldCurve | None = None,
+    cpr_annual: float = 0.0,
 ) -> List[CashFlow]:
     """Assumes an exact integer number of payment periods between
     start_date and maturity_date (same assumption as _fixed_coupon_schedule);
@@ -272,7 +355,14 @@ def mortgage_cash_flows(
     balance) and sidesteps tracking discrete reset dates separately from
     payment dates. Documented Fase 3 simplification: this implicitly lets
     the rate move every payment date, not just at
-    repricing_frequency_months boundaries."""
+    repricing_frequency_months boundaries.
+
+    cpr_annual (Fase 5): constant conditional prepayment rate applied
+    ONLY when rate_type == 'fixed' (see _fixed_mortgage_schedule) —
+    BCBS d368 scopes prepayment risk to fixed-rate loans. Accepted for
+    floating mortgages for call-site convenience but has no effect on
+    their output. Default 0.0 preserves the pre-Fase-5 fixed-rate
+    behaviour exactly."""
     if mortgage.rate_type == "floating" and yield_curve is None:
         return floating_repricing_cash_flow(mortgage, as_of_date, side="asset")
     if mortgage.maturity_date <= as_of_date:
@@ -289,17 +379,17 @@ def mortgage_cash_flows(
     remaining_dates = [d for d in grid_dates if d > as_of_date]
     n_total = len(remaining_dates)
 
+    if mortgage.rate_type == "fixed":
+        return _fixed_mortgage_schedule(mortgage, remaining_dates, n_total, cpr_annual)
+
     flows: List[CashFlow] = []
     balance = mortgage.notional
     period_start = mortgage.start_date
     for i, cf_date in enumerate(remaining_dates):
         n_remaining = n_total - i
-        if mortgage.rate_type == "floating":
-            t1 = max(0.0, (period_start - as_of_date).days / 365)
-            t2 = (cf_date - as_of_date).days / 365
-            period_rate = (yield_curve.forward_rate(t1, t2) + mortgage.spread) * (freq / 12)
-        else:
-            period_rate = mortgage.fixed_rate * (freq / 12)
+        t1 = max(0.0, (period_start - as_of_date).days / 365)
+        t2 = (cf_date - as_of_date).days / 365
+        period_rate = (yield_curve.forward_rate(t1, t2) + mortgage.spread) * (freq / 12)
 
         if period_rate == 0:
             payment = balance / n_remaining

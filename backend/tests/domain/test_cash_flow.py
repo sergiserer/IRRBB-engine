@@ -23,6 +23,18 @@ def test_cash_flow_holds_fields():
     assert cf.side == "asset"
 
 
+def test_cash_flow_accepts_prepayment_flow_type():
+    cf = CashFlow(
+        instrument_id="X1",
+        currency="EUR",
+        date=date(2027, 1, 1),
+        amount=500.0,
+        flow_type="prepayment",
+        side="asset",
+    )
+    assert cf.flow_type == "prepayment"
+
+
 def test_cash_flow_is_immutable():
     cf = CashFlow(
         instrument_id="X1",

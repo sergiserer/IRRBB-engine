@@ -266,6 +266,9 @@ def test_mortgage_french_amortization_reference_case():
     payment_2 = interest_flows[1].amount + principal_flows[1].amount
     assert payment_1 == pytest.approx(payment_2)
     assert all(f.side == "asset" for f in flows)
+    # cpr_annual defaults to 0.0 -- no prepayment flows are ever emitted
+    # unless a caller explicitly opts in.
+    assert all(f.flow_type != "prepayment" for f in flows)
 
 
 def test_mortgage_matured_returns_empty():
@@ -364,6 +367,84 @@ def test_mortgage_zero_percent_uses_straight_line_amortization():
     assert sum(f.amount for f in principal_flows) == pytest.approx(100_000.0)
     # No NaN values
     assert all(not f.amount != f.amount for f in flows)  # NaN != NaN is True
+
+
+def test_mortgage_fixed_with_cpr_pays_off_before_maturity_date():
+    # notional 100,000, 6% fixed, monthly, 24-month contractual term,
+    # cpr_annual=0.20 (illustrative, deliberately higher than the
+    # project's 5% default so the early-payoff effect is unambiguous in
+    # a short 24-period window). All figures below computed
+    # independently in Python from the formulas in the design spec
+    # (docs/superpowers/specs/2026-08-16-phase5-prepayment-design.md),
+    # not by calling mortgage_cash_flows:
+    #   period_rate = 0.06 * (1/12) = 0.005
+    #   payment_fixed = 100,000 * 0.005 / (1 - 1.005**-24) = 4,432.061025275781
+    #   smm = 1 - (1 - 0.20)**(1/12) = 0.018423470126248342
+    #   Period 1: interest = 100,000 * 0.005 = 500.0
+    #             scheduled_principal = 4,432.061025275781 - 500.0 = 3,932.0610252757806
+    #             prepayment = 0.018423470126248342 * (100,000 - 3,932.0610252757806)
+    #                        = 1,769.9048037910807
+    #   Simulating all periods this way, the balance reaches 0 after 20
+    #   of the 24 contractual monthly periods (last flow 2025-09-01,
+    #   contractual maturity_date is 2026-01-01).
+    mortgage = Mortgage(
+        instrument_id="MTGCPR",
+        currency="EUR",
+        notional=100_000,
+        start_date=date(2024, 1, 1),
+        maturity_date=date(2026, 1, 1),
+        rate_type="fixed",
+        fixed_rate=0.06,
+        amortization_type="french",
+        payment_frequency_months=1,
+    )
+    flows = mortgage_cash_flows(mortgage, date(2024, 1, 1), cpr_annual=0.20)
+
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+    principal_flows = sorted([f for f in flows if f.flow_type == "principal"], key=lambda f: f.date)
+    prepayment_flows = sorted([f for f in flows if f.flow_type == "prepayment"], key=lambda f: f.date)
+
+    assert len(interest_flows) == 20
+    assert len(principal_flows) == 20
+    assert len(prepayment_flows) == 20
+    dates = sorted({f.date for f in flows})
+    assert dates[-1] == date(2025, 9, 1)
+    assert dates[-1] < mortgage.maturity_date
+
+    assert interest_flows[0].date == date(2024, 2, 1)
+    assert interest_flows[0].amount == pytest.approx(500.0)
+    assert principal_flows[0].amount == pytest.approx(3_932.0610252757806, rel=1e-9)
+    assert prepayment_flows[0].amount == pytest.approx(1_769.9048037910807, rel=1e-9)
+
+    # Fully amortizes: scheduled + unscheduled principal sums to the notional.
+    total_principal = sum(f.amount for f in principal_flows) + sum(f.amount for f in prepayment_flows)
+    assert total_principal == pytest.approx(100_000.0)
+    assert all(f.side == "asset" for f in flows)
+
+
+def test_mortgage_floating_ignores_cpr_annual():
+    # BCBS d368 scopes prepayment risk to fixed-rate loans; cpr_annual is
+    # accepted for floating mortgages (so callers don't need to branch
+    # by rate_type) but must have zero effect on the output.
+    mortgage = Mortgage(
+        instrument_id="MTGFWDCPR",
+        currency="EUR",
+        notional=100_000,
+        start_date=date(2025, 1, 1),
+        maturity_date=date(2027, 1, 1),
+        rate_type="floating",
+        spread=0.01,
+        reference_index="EURIBOR_12M",
+        repricing_frequency_months=12,
+        next_repricing_date=date(2026, 1, 1),
+        amortization_type="french",
+        payment_frequency_months=12,
+    )
+    as_of_date = date(2025, 1, 1)
+    curve = _reference_curve()
+    flows_without_cpr = mortgage_cash_flows(mortgage, as_of_date, yield_curve=curve, cpr_annual=0.0)
+    flows_with_cpr = mortgage_cash_flows(mortgage, as_of_date, yield_curve=curve, cpr_annual=0.20)
+    assert flows_without_cpr == flows_with_cpr
 
 
 def test_bond_floating_with_curve_projects_full_coupon_schedule():
