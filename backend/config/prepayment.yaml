@@ -1,0 +1,12 @@
+# Constant Conditional Prepayment Rate (CPR) applied to fixed-rate
+# mortgages only (see mortgage_cash_flows in
+# app/engine/cash_flow_generation.py). BCBS d368 / EBA RTS 2022/09 treat
+# prepayment as a bank-calibrated behavioural assumption, not a fixed
+# regulatory magnitude (unlike eba_shocks.yaml, whose shock magnitudes
+# are prescribed). No historical portfolio data exists for this
+# synthetic project; a citable Spanish mortgage-market CPR figure was
+# searched for (Banco de España, AHE, RMBS rating-agency reports) with
+# no success -- see docs/internal/DOCUMENTACION_TECNICA.md, Fase 5, for
+# the detail of that search. This value is illustrative only, not
+# calibrated from real data.
+cpr_annual: 0.05
