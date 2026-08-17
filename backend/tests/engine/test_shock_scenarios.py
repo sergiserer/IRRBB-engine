@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.data.loaders import load_balance_sheet
+from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.shocks import SCENARIOS, apply_shock, load_shock_config
 from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.eve import compute_eve
@@ -88,4 +89,24 @@ def test_run_eba_shock_scenarios_threads_cpr_annual():
     # eve also differs, not just the base.
     parallel_up_without = next(r for r in results_without_cpr if r.scenario == "parallel_up")
     parallel_up_with = next(r for r in results_with_cpr if r.scenario == "parallel_up")
+    assert parallel_up_with.eve_result.eve != pytest.approx(parallel_up_without.eve_result.eve)
+
+
+def test_run_eba_shock_scenarios_threads_nmd_decay_config():
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    base_curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+    config = _config()
+    decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=5.0, decay_frequency_months=1)
+
+    results_without_decay = run_eba_shock_scenarios(balance_sheet, AS_OF_DATE, base_curve, "EUR", config)
+    results_with_decay = run_eba_shock_scenarios(
+        balance_sheet, AS_OF_DATE, base_curve, "EUR", config, nmd_decay_config=decay_config
+    )
+
+    assert results_with_decay[0].base_eve != pytest.approx(results_without_decay[0].base_eve)
+    # Every scenario (base + all 6 shocked curves) uses the same
+    # nmd_decay_config -- confirm at least one shocked scenario's eve
+    # also differs, not just the base.
+    parallel_up_without = next(r for r in results_without_decay if r.scenario == "parallel_up")
+    parallel_up_with = next(r for r in results_with_decay if r.scenario == "parallel_up")
     assert parallel_up_with.eve_result.eve != pytest.approx(parallel_up_without.eve_result.eve)
