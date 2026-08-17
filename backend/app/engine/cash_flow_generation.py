@@ -25,7 +25,9 @@ def nmd_cash_flows(
     saturates decay_config.core_max_life_years as the resulting
     weighted-average maturity — a straight-line spread over [0, T] has
     average maturity T/2, so T = 2 * core_max_life_years (see the design
-    spec's "Approach" section). All flows keep flow_type='principal':
+    spec's "Approach" section), minus one period to correct the discrete
+    grid's off-by-one (see the comment on n_periods below). All flows
+    keep flow_type='principal':
     this only changes WHEN NMD principal is slotted, not what kind of
     flow it is (same convention as floating_repricing_cash_flow's
     roll-forward), so build_gap_report's 'principal'-only bucket filter
@@ -46,7 +48,21 @@ def nmd_cash_flows(
     non_core = nmd.notional * (1 - decay_config.core_fraction)
     core = nmd.notional * decay_config.core_fraction
     horizon_months = 2 * decay_config.core_max_life_years * 12
-    n_periods = round(horizon_months / decay_config.decay_frequency_months)
+    # The flows sit at k = 1..n periods (never at k = 0, which is where the
+    # non-core flow already is), so the discrete weighted-average maturity
+    # is (n + 1) / 2 periods, not n / 2. Dropping one period (n = T/f - 1)
+    # makes that average exactly T/2 = core_max_life_years, saturating the
+    # EBA cap instead of overshooting it.
+    n_periods = round(horizon_months / decay_config.decay_frequency_months) - 1
+    if n_periods < 1:
+        raise ValueError(
+            "nmd decay config produces no core runoff periods: "
+            f"core_max_life_years={decay_config.core_max_life_years} and "
+            f"decay_frequency_months={decay_config.decay_frequency_months} give a "
+            f"{horizon_months}-month horizon, i.e. n_periods={n_periods}. The decay "
+            "frequency must split that horizon (2 * core_max_life_years * 12 months) "
+            "into at least two steps."
+        )
     per_period_amount = core / n_periods
 
     flows: List[CashFlow] = [

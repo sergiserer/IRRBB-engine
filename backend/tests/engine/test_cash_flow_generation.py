@@ -1,9 +1,10 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 from app.domain.instruments import Bond, IssuedDebt, Leg, Mortgage, NonMaturingDeposit, Swap, TermDeposit
-from app.domain.nmd_decay import NmdDecayConfig
+from app.domain.nmd_decay import NmdDecayConfig, load_nmd_decay_config
 from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.cash_flow_generation import (
     bond_cash_flows,
@@ -14,6 +15,8 @@ from app.engine.cash_flow_generation import (
     swap_leg_cash_flows,
     term_deposit_cash_flows,
 )
+
+NMD_DECAY_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "nmd_decay.yaml"
 
 
 def _reference_curve() -> YieldCurve:
@@ -43,11 +46,20 @@ def test_nmd_cash_flow_lands_on_as_of_date():
 def test_nmd_cash_flows_with_decay_config_splits_core_and_non_core():
     # notional 100,000, core_fraction=0.5, core_max_life_years=1,
     # decay_frequency_months=1. All figures below computed independently
-    # in Python (not by calling nmd_cash_flows):
+    # in Python from the formula (not by calling nmd_cash_flows):
     #   non_core = 100,000 * (1 - 0.5) = 50,000.0, dated as_of_date
     #   core = 100,000 * 0.5 = 50,000.0
-    #   horizon T = 2 * core_max_life_years = 2 years -> 24 monthly periods
-    #   per_period_amount = 50,000 / 24 = 2083.3333333333335
+    #   horizon T = 2 * core_max_life_years = 2 years = 24 months
+    #   n_periods = round(24 / 1) - 1 = 23
+    #     (the -1 is what makes the discrete average maturity of flows
+    #      placed at k = 1..n exactly T/2: mean(1..23) = 12 months = 1
+    #      year = core_max_life_years, saturating the cap rather than
+    #      overshooting it as n = 24 would -> mean(1..24) = 12.5 months)
+    #   per_period_amount = 50,000 / 23 = 2173.913043478261
+    #   first core date = 2026-01-01 + 1 month  = 2026-02-01
+    #   last core date  = 2026-01-01 + 23 months = 2027-12-01
+    #   total flows = 1 non-core + 23 core = 24
+    #   sum = 50,000.0 + 23 * 2173.913043478261 = 100,000.0
     nmd = NonMaturingDeposit(
         instrument_id="NMDCORE",
         currency="EUR",
@@ -60,7 +72,7 @@ def test_nmd_cash_flows_with_decay_config_splits_core_and_non_core():
 
     flows = nmd_cash_flows(nmd, as_of, decay_config=decay_config)
 
-    assert len(flows) == 25  # 1 non-core + 24 core periods
+    assert len(flows) == 24  # 1 non-core + 23 core periods
     assert all(f.flow_type == "principal" for f in flows)
     assert all(f.side == "liability" for f in flows)
 
@@ -68,14 +80,55 @@ def test_nmd_cash_flows_with_decay_config_splits_core_and_non_core():
     assert non_core_flow.amount == pytest.approx(50_000.0)
 
     core_flows = sorted([f for f in flows if f.date != as_of], key=lambda f: f.date)
-    assert len(core_flows) == 24
+    assert len(core_flows) == 23
     assert core_flows[0].date == date(2026, 2, 1)
-    assert core_flows[0].amount == pytest.approx(2083.3333333333335, rel=1e-9)
-    assert core_flows[-1].date == date(2028, 1, 1)
-    assert core_flows[-1].amount == pytest.approx(2083.3333333333335, rel=1e-9)
+    assert core_flows[0].amount == pytest.approx(2173.913043478261, rel=1e-9)
+    assert core_flows[-1].date == date(2027, 12, 1)
+    assert core_flows[-1].amount == pytest.approx(2173.913043478261, rel=1e-9)
 
     # Fully reconciles: non-core + all core periods sum to the notional.
     assert sum(f.amount for f in flows) == pytest.approx(100_000.0)
+
+
+def test_nmd_core_runoff_weighted_average_maturity_saturates_eba_cap():
+    # Magnitude-sanity invariant under the REAL shipped config (same
+    # pattern prescribed after the Fase 3 bug, where an amortization-
+    # sums-to-par test was blind to the level of the rate): flow counts,
+    # dates and the sum-to-notional invariant are all insensitive to the
+    # runoff horizon being wrong, so assert the regulatory quantity
+    # itself -- the weighted-average maturity of the CORE component (the
+    # thing EBA/GL/2022/14 caps; the non-core piece is overnight by
+    # construction and is excluded).
+    #
+    # With core_max_life_years = T/2 and equal core amounts at k = 1..n
+    # periods, WAM = (n + 1)/2 periods = core_max_life_years exactly.
+    # The band below is two-sided on purpose: too long breaches the cap,
+    # too short silently under-utilizes it.
+    decay_config = load_nmd_decay_config(NMD_DECAY_CONFIG_PATH)
+    nmd = NonMaturingDeposit(
+        instrument_id="NMDWAM",
+        currency="EUR",
+        notional=1_000_000,
+        as_of_date=date(2026, 1, 1),
+        rate=0.001,
+    )
+    as_of = date(2026, 1, 1)
+
+    flows = nmd_cash_flows(nmd, as_of, decay_config=decay_config)
+    core_flows = [f for f in flows if f.date != as_of]
+    assert core_flows  # guard: an empty core would make the WAM vacuous
+
+    # ACT/365, the year fraction convention used throughout the engine.
+    wam_years = sum(f.amount * (f.date - as_of).days / 365 for f in core_flows) / sum(
+        f.amount for f in core_flows
+    )
+
+    # Tolerance ~0.01y (~3.7 days) absorbs the ACT/365-vs-calendar-month
+    # drift (a 1..119 monthly grid measured in 365-day years lands at
+    # 5.0010y, not 5.0000y) without being loose enough to hide an
+    # off-by-one period (which would move the WAM by ~0.042y).
+    assert wam_years <= decay_config.core_max_life_years + 0.01
+    assert wam_years >= decay_config.core_max_life_years - 0.01
 
 
 def test_nmd_cash_flows_without_decay_config_is_unchanged():
