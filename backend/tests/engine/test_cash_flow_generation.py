@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 
 from app.domain.instruments import Bond, IssuedDebt, Leg, Mortgage, NonMaturingDeposit, Swap, TermDeposit
+from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.cash_flow_generation import (
     bond_cash_flows,
@@ -37,6 +38,63 @@ def test_nmd_cash_flow_lands_on_as_of_date():
     assert cf.amount == 3_000_000
     assert cf.flow_type == "principal"
     assert cf.side == "liability"
+
+
+def test_nmd_cash_flows_with_decay_config_splits_core_and_non_core():
+    # notional 100,000, core_fraction=0.5, core_max_life_years=1,
+    # decay_frequency_months=1. All figures below computed independently
+    # in Python (not by calling nmd_cash_flows):
+    #   non_core = 100,000 * (1 - 0.5) = 50,000.0, dated as_of_date
+    #   core = 100,000 * 0.5 = 50,000.0
+    #   horizon T = 2 * core_max_life_years = 2 years -> 24 monthly periods
+    #   per_period_amount = 50,000 / 24 = 2083.3333333333335
+    nmd = NonMaturingDeposit(
+        instrument_id="NMDCORE",
+        currency="EUR",
+        notional=100_000,
+        as_of_date=date(2026, 1, 1),
+        rate=0.001,
+    )
+    as_of = date(2026, 1, 1)
+    decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=1, decay_frequency_months=1)
+
+    flows = nmd_cash_flows(nmd, as_of, decay_config=decay_config)
+
+    assert len(flows) == 25  # 1 non-core + 24 core periods
+    assert all(f.flow_type == "principal" for f in flows)
+    assert all(f.side == "liability" for f in flows)
+
+    non_core_flow = next(f for f in flows if f.date == as_of)
+    assert non_core_flow.amount == pytest.approx(50_000.0)
+
+    core_flows = sorted([f for f in flows if f.date != as_of], key=lambda f: f.date)
+    assert len(core_flows) == 24
+    assert core_flows[0].date == date(2026, 2, 1)
+    assert core_flows[0].amount == pytest.approx(2083.3333333333335, rel=1e-9)
+    assert core_flows[-1].date == date(2028, 1, 1)
+    assert core_flows[-1].amount == pytest.approx(2083.3333333333335, rel=1e-9)
+
+    # Fully reconciles: non-core + all core periods sum to the notional.
+    assert sum(f.amount for f in flows) == pytest.approx(100_000.0)
+
+
+def test_nmd_cash_flows_without_decay_config_is_unchanged():
+    # Regression guard: decay_config defaults to None, reproducing the
+    # Fase 2 placeholder exactly.
+    nmd = NonMaturingDeposit(
+        instrument_id="NMDCORE",
+        currency="EUR",
+        notional=100_000,
+        as_of_date=date(2026, 1, 1),
+        rate=0.001,
+    )
+    as_of = date(2026, 1, 1)
+    flows = nmd_cash_flows(nmd, as_of)
+    assert len(flows) == 1
+    assert flows[0].amount == pytest.approx(100_000.0)
+    assert flows[0].date == as_of
+    assert flows[0].flow_type == "principal"
+    assert flows[0].side == "liability"
 
 
 def test_term_deposit_bullet_cash_flow_reference_case():

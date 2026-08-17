@@ -7,23 +7,73 @@ import pandas as pd
 
 from app.domain.cash_flow import CashFlow, Side
 from app.domain.instruments import Bond, Instrument, IssuedDebt, Leg, Mortgage, NonMaturingDeposit, Swap, TermDeposit
+from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.prepayment import smm_for_period
 from app.domain.yield_curve import YieldCurve
 
 
-def nmd_cash_flows(nmd: NonMaturingDeposit, as_of_date: date) -> List[CashFlow]:
-    """Places the full balance on as_of_date (the overnight bucket) —
-    a placeholder until Fase 5 adds a behavioural decay model."""
-    return [
+def nmd_cash_flows(
+    nmd: NonMaturingDeposit, as_of_date: date, decay_config: NmdDecayConfig | None = None
+) -> List[CashFlow]:
+    """Places the full balance on as_of_date (the overnight bucket) when
+    decay_config is None — the Fase 2 placeholder, byte-identical to
+    every pre-Fase-5-parte-2 caller.
+
+    With decay_config supplied, splits notional into a non-core portion
+    (stays overnight, at as_of_date) and a core portion, spread
+    straight-line across monthly principal flows out to a horizon that
+    saturates decay_config.core_max_life_years as the resulting
+    weighted-average maturity — a straight-line spread over [0, T] has
+    average maturity T/2, so T = 2 * core_max_life_years (see the design
+    spec's "Approach" section). All flows keep flow_type='principal':
+    this only changes WHEN NMD principal is slotted, not what kind of
+    flow it is (same convention as floating_repricing_cash_flow's
+    roll-forward), so build_gap_report's 'principal'-only bucket filter
+    and the sum-of-principal-equals-notional invariant both keep working
+    unmodified."""
+    if decay_config is None:
+        return [
+            CashFlow(
+                instrument_id=nmd.instrument_id,
+                currency=nmd.currency,
+                date=as_of_date,
+                amount=nmd.notional,
+                flow_type="principal",
+                side="liability",
+            )
+        ]
+
+    non_core = nmd.notional * (1 - decay_config.core_fraction)
+    core = nmd.notional * decay_config.core_fraction
+    horizon_months = 2 * decay_config.core_max_life_years * 12
+    n_periods = round(horizon_months / decay_config.decay_frequency_months)
+    per_period_amount = core / n_periods
+
+    flows: List[CashFlow] = [
         CashFlow(
             instrument_id=nmd.instrument_id,
             currency=nmd.currency,
             date=as_of_date,
-            amount=nmd.notional,
+            amount=non_core,
             flow_type="principal",
             side="liability",
         )
     ]
+    step = pd.DateOffset(months=decay_config.decay_frequency_months)
+    current = pd.Timestamp(as_of_date) + step
+    for _ in range(n_periods):
+        flows.append(
+            CashFlow(
+                instrument_id=nmd.instrument_id,
+                currency=nmd.currency,
+                date=current.date(),
+                amount=per_period_amount,
+                flow_type="principal",
+                side="liability",
+            )
+        )
+        current += step
+    return flows
 
 
 def term_deposit_cash_flows(deposit: TermDeposit, as_of_date: date) -> List[CashFlow]:
