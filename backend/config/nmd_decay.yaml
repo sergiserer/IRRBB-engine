@@ -1,0 +1,21 @@
+# NMD behaviour (Fase 5, parte 2): core/non-core split with an EBA/GL
+# 2022/14 average-maturity cap. "Non-core" NMD is treated as volatile
+# (overnight); "core" is spread straight-line out to a horizon that
+# saturates the cap on weighted-average repricing maturity.
+#
+# core_max_life_years: EBA/GL/2022/14's real cap (uniform across NMD
+# categories) on the weighted-average repricing maturity of the core
+# component -- a citable regulatory figure, verified by search.
+#
+# core_fraction: the synthetic data has no NMD category field (retail vs
+# wholesale, transactional vs non-transactional), so the category-specific
+# core-proportion ceilings from BCBS d368 Annex 2 (retail transactional
+# <=90%, retail non-transactional <=70%, wholesale <=50%) can't be applied
+# directly. This uses the MOST CONSERVATIVE of the three (wholesale, 50%)
+# as an explicit default -- not a calibration against historical balance
+# volatility (this project has none), a conservative regulatory ceiling
+# adopted in its place. See DOCUMENTACION_TECNICA.md, Fase 5 parte 2, for
+# detail.
+core_fraction: 0.50
+core_max_life_years: 5.0
+decay_frequency_months: 1
