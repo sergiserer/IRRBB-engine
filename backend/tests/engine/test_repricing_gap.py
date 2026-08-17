@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.data.loaders import load_balance_sheet
+from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.time_buckets import load_time_buckets
 from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.repricing_gap import build_gap_report, generate_all_cash_flows
@@ -98,3 +99,21 @@ def test_generate_all_cash_flows_threads_cpr_annual_to_fixed_mortgages_only():
     # instrument type in this balance sheet is mortgage-like.
     assert len(prepayment_flows) > 0
     assert all(f.instrument_id == "MTG001" for f in prepayment_flows)
+
+
+def test_generate_all_cash_flows_threads_nmd_decay_config_to_nmd_only():
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=5.0, decay_frequency_months=1)
+
+    flows_without_decay = generate_all_cash_flows(balance_sheet, AS_OF_DATE)
+    flows_with_decay = generate_all_cash_flows(balance_sheet, AS_OF_DATE, nmd_decay_config=decay_config)
+
+    nmd_ids = {n.instrument_id for n in balance_sheet.nmd}
+    nmd_flows_with_decay = [f for f in flows_with_decay if f.instrument_id in nmd_ids]
+    other_flows_without = [f for f in flows_without_decay if f.instrument_id not in nmd_ids]
+    other_flows_with = [f for f in flows_with_decay if f.instrument_id not in nmd_ids]
+
+    # Every NMD now carries more than one flow (split into core + non-core).
+    assert len(nmd_flows_with_decay) > len(balance_sheet.nmd)
+    # Every other instrument type is untouched by nmd_decay_config.
+    assert other_flows_with == other_flows_without
