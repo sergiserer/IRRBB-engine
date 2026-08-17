@@ -7,6 +7,7 @@ from typing import Iterable, List
 from app.domain.balance_sheet import BalanceSheet
 from app.domain.cash_flow import CashFlow
 from app.domain.instruments import Swap
+from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.yield_curve import YieldCurve
 from app.engine.cash_flow_generation import swap_leg_cash_flows
 from app.engine.repricing_gap import generate_all_cash_flows
@@ -47,18 +48,26 @@ class EVEResult:
 
 
 def compute_eve(
-    balance_sheet: BalanceSheet, as_of_date: date, yield_curve: YieldCurve, cpr_annual: float = 0.0
+    balance_sheet: BalanceSheet,
+    as_of_date: date,
+    yield_curve: YieldCurve,
+    cpr_annual: float = 0.0,
+    nmd_decay_config: NmdDecayConfig | None = None,
 ) -> EVEResult:
     """PV(assets) - PV(liabilities) + net swap PV under yield_curve.
     Discounts principal and interest cash flows (generate_all_cash_flows
     with a curve supplied projects floating instruments' full schedule —
-    see Fase 3 design spec). NMD remains the Fase 2 overnight placeholder
-    (DF(0) = 1.0, undiscounted) pending Fase 5's decay model.
+    see Fase 3 design spec).
 
-    cpr_annual (Fase 5): constant CPR passed through to
+    cpr_annual (Fase 5 parte 1): constant CPR passed through to
     generate_all_cash_flows — see its docstring. Default 0.0 preserves
-    Fase 3/4 behaviour exactly (no prepayment)."""
-    flows = generate_all_cash_flows(balance_sheet, as_of_date, yield_curve, cpr_annual)
+    Fase 3/4 behaviour exactly (no prepayment).
+
+    nmd_decay_config (Fase 5 parte 2): constant NMD core/non-core decay
+    passed through to generate_all_cash_flows — see its docstring.
+    Default None preserves the Fase 2 overnight-placeholder behaviour
+    exactly."""
+    flows = generate_all_cash_flows(balance_sheet, as_of_date, yield_curve, cpr_annual, nmd_decay_config)
     asset_flows = [cf for cf in flows if cf.side == "asset"]
     liability_flows = [cf for cf in flows if cf.side == "liability"]
     swap_net_pv = sum(swap_pv(swap, as_of_date, yield_curve) for swap in balance_sheet.swaps)

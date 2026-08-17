@@ -7,6 +7,7 @@ from app.data.loaders import load_balance_sheet
 from app.domain.balance_sheet import BalanceSheet
 from app.domain.cash_flow import CashFlow
 from app.domain.instruments import Bond, Leg, Swap, TermDeposit
+from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.cash_flow_generation import mortgage_cash_flows
 from app.engine.eve import compute_eve, pv, swap_pv
@@ -171,3 +172,23 @@ def test_compute_eve_with_cpr_annual_differs_from_without():
     # mortgages, which are always assets.
     assert eve_with_cpr.pv_liabilities == pytest.approx(eve_without_cpr.pv_liabilities)
     assert eve_with_cpr.swap_net_pv == pytest.approx(eve_without_cpr.swap_net_pv)
+
+
+def test_compute_eve_with_nmd_decay_config_differs_from_without():
+    # NMD is always a liability; splitting it into non-core (still
+    # overnight) + core (spread out over years, so DF(t) < 1 under any
+    # curve with a positive rate) must reduce pv_liabilities and
+    # therefore change eve, versus the nmd_decay_config=None baseline.
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+    decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=5.0, decay_frequency_months=1)
+
+    eve_without_decay = compute_eve(balance_sheet, AS_OF_DATE, curve)
+    eve_with_decay = compute_eve(balance_sheet, AS_OF_DATE, curve, nmd_decay_config=decay_config)
+
+    assert eve_with_decay.pv_liabilities != pytest.approx(eve_without_decay.pv_liabilities)
+    assert eve_with_decay.eve != pytest.approx(eve_without_decay.eve)
+    # Assets and swap PV are unaffected -- nmd_decay_config only touches
+    # NMD, which is always a liability.
+    assert eve_with_decay.pv_assets == pytest.approx(eve_without_decay.pv_assets)
+    assert eve_with_decay.swap_net_pv == pytest.approx(eve_without_decay.swap_net_pv)
