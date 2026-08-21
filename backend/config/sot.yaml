@@ -1,0 +1,5 @@
+# Standardised Outlier Test (SOT) de EVE. BCBS d368 Anexo 2 / EBA
+# GL/2022/14: umbral del 15% de Tier 1 sobre el peor Delta-EVE de los 6
+# escenarios EBA -- cifra regulatoria prescrita, no un supuesto
+# calibrado (a diferencia de prepayment.yaml/nmd_decay.yaml).
+threshold_pct: 0.15
