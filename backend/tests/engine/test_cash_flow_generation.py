@@ -71,23 +71,24 @@ def test_nmd_cash_flows_with_decay_config_splits_core_and_non_core():
     decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=1, decay_frequency_months=1)
 
     flows = nmd_cash_flows(nmd, as_of, decay_config=decay_config)
+    principal_flows = [f for f in flows if f.flow_type == "principal"]
 
-    assert len(flows) == 24  # 1 non-core + 23 core periods
-    assert all(f.flow_type == "principal" for f in flows)
-    assert all(f.side == "liability" for f in flows)
+    assert len(principal_flows) == 24  # 1 non-core + 23 core periods
+    assert all(f.side == "liability" for f in principal_flows)
 
-    non_core_flow = next(f for f in flows if f.date == as_of)
+    non_core_flow = next(f for f in principal_flows if f.date == as_of)
     assert non_core_flow.amount == pytest.approx(50_000.0)
 
-    core_flows = sorted([f for f in flows if f.date != as_of], key=lambda f: f.date)
+    core_flows = sorted([f for f in principal_flows if f.date != as_of], key=lambda f: f.date)
     assert len(core_flows) == 23
     assert core_flows[0].date == date(2026, 2, 1)
     assert core_flows[0].amount == pytest.approx(2173.913043478261, rel=1e-9)
     assert core_flows[-1].date == date(2027, 12, 1)
     assert core_flows[-1].amount == pytest.approx(2173.913043478261, rel=1e-9)
 
-    # Fully reconciles: non-core + all core periods sum to the notional.
-    assert sum(f.amount for f in flows) == pytest.approx(100_000.0)
+    # Fully reconciles: non-core + all core periods sum to the notional
+    # (principal only -- interest, added in Fase 6, is a separate concern).
+    assert sum(f.amount for f in principal_flows) == pytest.approx(100_000.0)
 
 
 def test_nmd_core_runoff_weighted_average_maturity_saturates_eba_cap():
@@ -115,7 +116,7 @@ def test_nmd_core_runoff_weighted_average_maturity_saturates_eba_cap():
     as_of = date(2026, 1, 1)
 
     flows = nmd_cash_flows(nmd, as_of, decay_config=decay_config)
-    core_flows = [f for f in flows if f.date != as_of]
+    core_flows = [f for f in flows if f.flow_type == "principal" and f.date != as_of]
     assert core_flows  # guard: an empty core would make the WAM vacuous
 
     # ACT/365, the year fraction convention used throughout the engine.
@@ -148,6 +149,68 @@ def test_nmd_cash_flows_without_decay_config_is_unchanged():
     assert flows[0].date == as_of
     assert flows[0].flow_type == "principal"
     assert flows[0].side == "liability"
+
+
+def test_nmd_cash_flows_with_decay_config_emits_declining_interest():
+    # Mismo shape que test_nmd_cash_flows_with_decay_config_splits_core_and_non_core
+    # pero con un rate no trivial para ejercitar el interés. Todas las
+    # cifras siguientes se calcularon de forma independiente en Python a
+    # partir de la fórmula (no llamando a nmd_cash_flows):
+    #   core = 100,000 * 0.5 = 50,000.0, n_periods = 23,
+    #   per_period_amount = 50,000 / 23 = 2173.913043478261
+    #   interest_k = balance_before_k * rate * (1/12), donde
+    #   balance_before_k = core - (k - 1) * per_period_amount
+    #   interest_1  (balance=50,000.0)            = 83.33333333333333,  fecha 2024-02-01
+    #   interest_2  (balance=47,826.08695652174)  = 79.71014492753622,  fecha 2024-03-01
+    #   interest_23 (balance=2,173.9130434782564) = 3.6231884057970936, fecha 2025-12-01
+    #   suma de los 23 flujos de interés = 999.9999999999999
+    nmd = NonMaturingDeposit(
+        instrument_id="NMDINTEREST",
+        currency="EUR",
+        notional=100_000,
+        as_of_date=date(2024, 1, 1),
+        rate=0.02,
+    )
+    as_of = date(2024, 1, 1)
+    decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=1, decay_frequency_months=1)
+
+    flows = nmd_cash_flows(nmd, as_of, decay_config=decay_config)
+    interest_flows = sorted([f for f in flows if f.flow_type == "interest"], key=lambda f: f.date)
+
+    assert len(interest_flows) == 23
+    assert all(f.side == "liability" for f in interest_flows)
+    assert interest_flows[0].date == date(2024, 2, 1)
+    assert interest_flows[0].amount == pytest.approx(83.33333333333333, rel=1e-9)
+    assert interest_flows[1].date == date(2024, 3, 1)
+    assert interest_flows[1].amount == pytest.approx(79.71014492753622, rel=1e-9)
+    assert interest_flows[-1].date == date(2025, 12, 1)
+    assert interest_flows[-1].amount == pytest.approx(3.6231884057970936, rel=1e-9)
+
+    # Invariante cruzado: el total de interés debe quedar estrictamente
+    # por debajo del límite superior "el saldo nunca decae" (core * rate *
+    # n_periods/12) -- confirma que el interés sigue el saldo decayente,
+    # no el notional plano.
+    total_interest = sum(f.amount for f in interest_flows)
+    assert total_interest == pytest.approx(999.9999999999999, rel=1e-9)
+    upper_bound = 50_000 * 0.02 * (23 / 12)
+    assert total_interest < upper_bound
+
+
+def test_nmd_cash_flows_without_decay_config_still_has_no_interest():
+    # decay_config=None: el saldo vivo tras as_of_date es 0 (todo el
+    # notional ya se trató como devuelto en as_of_date), así que la MISMA
+    # fórmula de interés (saldo vivo * rate) da 0 flujos de interés por
+    # construcción -- no por un caso especial explícito.
+    nmd = NonMaturingDeposit(
+        instrument_id="NMDNOINTEREST",
+        currency="EUR",
+        notional=100_000,
+        as_of_date=date(2026, 1, 1),
+        rate=0.02,
+    )
+    as_of = date(2026, 1, 1)
+    flows = nmd_cash_flows(nmd, as_of)
+    assert all(f.flow_type == "principal" for f in flows)
 
 
 def test_term_deposit_bullet_cash_flow_reference_case():

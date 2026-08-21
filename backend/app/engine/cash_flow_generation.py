@@ -26,13 +26,25 @@ def nmd_cash_flows(
     weighted-average maturity — a straight-line spread over [0, T] has
     average maturity T/2, so T = 2 * core_max_life_years (see the design
     spec's "Approach" section), minus one period to correct the discrete
-    grid's off-by-one (see the comment on n_periods below). All flows
-    keep flow_type='principal':
-    this only changes WHEN NMD principal is slotted, not what kind of
-    flow it is (same convention as floating_repricing_cash_flow's
-    roll-forward), so build_gap_report's 'principal'-only bucket filter
-    and the sum-of-principal-equals-notional invariant both keep working
-    unmodified."""
+    grid's off-by-one (see the comment on n_periods below). The principal
+    flows keep flow_type='principal': this only changes WHEN NMD principal
+    is slotted, not what kind of flow it is (same convention as
+    floating_repricing_cash_flow's roll-forward), so build_gap_report's
+    'principal'-only bucket filter and the sum-of-principal-equals-notional
+    invariant both keep working unmodified.
+
+    Con decay_config supplied, además de reasignar el principal, cada
+    tramo core en k = 1..n_periods gana un flujo flow_type='interest'
+    (side='liability') sobre el saldo vivo antes de ese pago:
+    interest_k = balance_before_k * nmd.rate * (decay_frequency_months / 12),
+    con balance_before_k = core - (k - 1) * per_period_amount (misma
+    mecánica que mortgage_cash_flows: interés sobre el saldo antes del
+    pago, no sobre el notional plano). El tramo non_core no genera
+    interés (duración cero, ya está fuera de balance en as_of_date).
+    Con decay_config=None, el saldo vivo tras as_of_date ya es 0 bajo el
+    placeholder de Fase 2, así que la misma fórmula da 0 flujos de
+    interés por construcción, no por un caso especial (ver Fase 6 en
+    DOCUMENTACION_TECNICA.md)."""
     if decay_config is None:
         return [
             CashFlow(
@@ -77,17 +89,31 @@ def nmd_cash_flows(
     ]
     step = pd.DateOffset(months=decay_config.decay_frequency_months)
     current = pd.Timestamp(as_of_date) + step
+    balance = core
+    period_rate = nmd.rate * (decay_config.decay_frequency_months / 12)
     for _ in range(n_periods):
+        cf_date = current.date()
         flows.append(
             CashFlow(
                 instrument_id=nmd.instrument_id,
                 currency=nmd.currency,
-                date=current.date(),
+                date=cf_date,
+                amount=balance * period_rate,
+                flow_type="interest",
+                side="liability",
+            )
+        )
+        flows.append(
+            CashFlow(
+                instrument_id=nmd.instrument_id,
+                currency=nmd.currency,
+                date=cf_date,
                 amount=per_period_amount,
                 flow_type="principal",
                 side="liability",
             )
         )
+        balance -= per_period_amount
         current += step
     return flows
 
