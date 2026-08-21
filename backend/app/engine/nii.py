@@ -9,6 +9,7 @@ import pandas as pd
 from app.domain.balance_sheet import BalanceSheet
 from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.yield_curve import YieldCurve
+from app.engine.cash_flow_generation import swap_leg_cash_flows
 from app.engine.repricing_gap import generate_all_cash_flows
 
 HORIZON_MONTHS = 24
@@ -77,5 +78,17 @@ def compute_nii(
             monthly[idx] += cf.amount
         else:
             monthly[idx] -= cf.amount
+
+    for swap in balance_sheet.swaps:
+        receive_flows = swap_leg_cash_flows(swap, swap.receive_leg, as_of_date, yield_curve)
+        pay_flows = swap_leg_cash_flows(swap, swap.pay_leg, as_of_date, yield_curve)
+        for cf in receive_flows:
+            idx = month_index(cf.date, boundaries)
+            if idx is not None:
+                monthly[idx] += cf.amount
+        for cf in pay_flows:
+            idx = month_index(cf.date, boundaries)
+            if idx is not None:
+                monthly[idx] -= cf.amount
 
     return NIIResult(as_of_date=as_of_date, monthly_net_interest=monthly)

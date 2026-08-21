@@ -149,3 +149,43 @@ def test_compute_nii_contributes_nothing_after_instrument_matures():
 
     assert result.monthly_net_interest[6] == pytest.approx(1_000.0)
     assert result.monthly_net_interest[7:] == [0.0] * 17
+
+
+def test_compute_nii_nets_swap_receive_and_pay_legs_by_month():
+    from app.domain.instruments import Leg, Swap
+
+    # Mismas fechas/curva que la hipoteca del caso de referencia principal,
+    # reutilizadas aquí porque sus forward rates ya están verificadas de
+    # forma independiente: forward_rate(0,1) = 0.05 exacto,
+    # forward_rate(1,2) = 0.07009523809523821 (verificado contra
+    # YieldCurve.forward_rate directamente, no contra nii.py).
+    # payment_frequency_months=12, así que period_rate = tasa anual, sin
+    # escalar por freq/12.
+    #
+    # receive_leg (variable, spread 1%): cupon_1 = 1,000,000 *
+    #   (0.05 + 0.01) = 60,000.0, fecha 2026-01-01 (bucket 12).
+    #   cupon_2 = 1,000,000 * (0.07009523809523821 + 0.01) =
+    #   80,095.23809523821, fecha 2027-01-01 (bucket 24, excluido).
+    # pay_leg (fijo 3%): cupon_1 = 1,000,000 * 0.03 = 30,000.0 (bucket 12),
+    #   cupon_2 = 30,000.0 (bucket 24, excluido).
+    # net_1 = 60,000.0 - 30,000.0 = 30,000.0, bucket 12.
+    # net_2 queda enteramente fuera de la ventana (ambas patas en bucket 24).
+    swap = Swap(
+        instrument_id="SWAPNII",
+        currency="EUR",
+        notional=1_000_000,
+        start_date=date(2025, 1, 1),
+        maturity_date=date(2027, 1, 1),
+        payment_frequency_months=12,
+        pay_leg=Leg(rate_type="fixed", fixed_rate=0.03),
+        receive_leg=Leg(rate_type="floating", spread=0.01, reference_index="EURIBOR_12M"),
+    )
+    balance_sheet = BalanceSheet(swaps=[swap])
+    as_of_date = date(2025, 1, 1)
+    curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.05), CurvePoint(tenor_years=3.0, rate=0.07)])
+
+    result = compute_nii(balance_sheet, as_of_date, curve)
+
+    assert result.monthly_net_interest[12] == pytest.approx(30_000.0, rel=1e-6)
+    assert result.nii_12m == pytest.approx(0.0)
+    assert result.nii_24m == pytest.approx(30_000.0, rel=1e-6)
