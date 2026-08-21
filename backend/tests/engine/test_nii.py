@@ -3,7 +3,8 @@ from datetime import date
 import pytest
 
 from app.domain.balance_sheet import BalanceSheet
-from app.domain.instruments import Bond, Mortgage, TermDeposit
+from app.domain.instruments import Bond, Mortgage, NonMaturingDeposit, TermDeposit
+from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.nii import compute_nii, month_boundaries, month_index
 
@@ -232,3 +233,112 @@ def test_run_nii_scenarios_parallel_up_and_down_move_nii_in_opposite_directions(
     down = next(r for r in results if r.scenario == "parallel_down")
     assert up.delta_nii_12m * down.delta_nii_12m < 0
     assert up.delta_nii_24m * down.delta_nii_24m < 0
+
+
+def test_compute_nii_with_nmd_decay_config_differs_from_without():
+    # With nmd_decay_config=None (the Fase 2 placeholder), nmd_cash_flows
+    # emits only a single flow_type='principal' flow at as_of_date --
+    # compute_nii only accumulates flow_type='interest', so an NMD-only
+    # balance sheet's NII is exactly 0.0 under the default. Supplying a
+    # decay_config splits the NMD into non-core (still principal-only)
+    # and a core tranche that pays flow_type='interest' monthly on its
+    # declining balance (see nmd_cash_flows's docstring) -- with
+    # decay_frequency_months=1, several of those interest flows land
+    # inside both the 12m and 24m windows, so nii_12m/nii_24m must move
+    # away from 0.0, same "differs from without" pattern as
+    # test_compute_eve_with_nmd_decay_config_differs_from_without.
+    nmd = NonMaturingDeposit(
+        instrument_id="NMDNII",
+        currency="EUR",
+        notional=500_000,
+        as_of_date=date(2025, 1, 1),
+        rate=0.01,
+    )
+    balance_sheet = BalanceSheet(nmd=[nmd])
+    as_of_date = date(2025, 1, 1)
+    curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+    decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=5.0, decay_frequency_months=1)
+
+    result_without_decay = compute_nii(balance_sheet, as_of_date, curve)
+    result_with_decay = compute_nii(balance_sheet, as_of_date, curve, nmd_decay_config=decay_config)
+
+    assert result_without_decay.nii_12m == pytest.approx(0.0)
+    assert result_without_decay.nii_24m == pytest.approx(0.0)
+    assert result_with_decay.nii_12m != pytest.approx(result_without_decay.nii_12m)
+    assert result_with_decay.nii_24m != pytest.approx(result_without_decay.nii_24m)
+    # NMD is always a liability: the core tranche's interest expense
+    # makes NII strictly more negative than the 0.0 baseline.
+    assert result_with_decay.nii_12m < 0.0
+    assert result_with_decay.nii_24m < 0.0
+
+
+def test_run_nii_scenarios_threads_cpr_annual_and_nmd_decay_config():
+    from pathlib import Path
+
+    from app.domain.shocks import load_shock_config
+    from app.engine.nii import run_nii_scenarios
+
+    CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "eba_shocks.yaml"
+    config = load_shock_config(CONFIG_PATH)
+    as_of_date = date(2025, 1, 1)
+    base_curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+
+    # cpr_annual: same mechanism as
+    # test_run_eba_shock_scenarios_threads_cpr_annual -- a fixed-rate
+    # mortgage is the only instrument type affected (BCBS d368 scopes
+    # prepayment risk to fixed-rate loans). _fixed_mortgage_schedule
+    # computes each period's interest on the balance BEFORE that
+    # period's own prepayment, so the first quarterly coupon (month 3)
+    # is identical with/without cpr_annual -- payment_frequency_months=3
+    # (rather than 12) puts a second and third coupon (months 6 and 9)
+    # inside the 12m window too, where the prior period's prepayment has
+    # already shrunk the balance, so nii_12m (and nii_24m) must differ.
+    mortgage = Mortgage(
+        instrument_id="MTGNIISCEN",
+        currency="EUR",
+        notional=500_000,
+        start_date=as_of_date,
+        maturity_date=date(2035, 1, 1),
+        rate_type="fixed",
+        fixed_rate=0.04,
+        amortization_type="french",
+        payment_frequency_months=3,
+    )
+    mortgage_balance_sheet = BalanceSheet(mortgages=[mortgage])
+
+    results_without_cpr = run_nii_scenarios(mortgage_balance_sheet, as_of_date, base_curve, "EUR", config)
+    results_with_cpr = run_nii_scenarios(
+        mortgage_balance_sheet, as_of_date, base_curve, "EUR", config, cpr_annual=0.1
+    )
+
+    assert results_with_cpr[0].base_nii_12m != pytest.approx(results_without_cpr[0].base_nii_12m)
+    assert results_with_cpr[0].base_nii_24m != pytest.approx(results_without_cpr[0].base_nii_24m)
+
+    # nmd_decay_config: same mechanism as
+    # test_run_eba_shock_scenarios_threads_nmd_decay_config -- an NMD is
+    # the only instrument type affected.
+    nmd = NonMaturingDeposit(
+        instrument_id="NMDNIISCEN",
+        currency="EUR",
+        notional=500_000,
+        as_of_date=as_of_date,
+        rate=0.01,
+    )
+    nmd_balance_sheet = BalanceSheet(nmd=[nmd])
+    decay_config = NmdDecayConfig(core_fraction=0.5, core_max_life_years=5.0, decay_frequency_months=1)
+
+    results_without_decay = run_nii_scenarios(nmd_balance_sheet, as_of_date, base_curve, "EUR", config)
+    results_with_decay = run_nii_scenarios(
+        nmd_balance_sheet, as_of_date, base_curve, "EUR", config, nmd_decay_config=decay_config
+    )
+
+    assert results_with_decay[0].base_nii_12m != pytest.approx(results_without_decay[0].base_nii_12m)
+    assert results_with_decay[0].base_nii_24m != pytest.approx(results_without_decay[0].base_nii_24m)
+    # Every scenario (base + both shocked curves) uses the same
+    # nmd_decay_config -- confirm at least one shocked scenario's
+    # nii_result also differs, not just the base, proving the parameter
+    # reaches all the way through run_nii_scenarios -> compute_nii ->
+    # generate_all_cash_flows.
+    parallel_up_without = next(r for r in results_without_decay if r.scenario == "parallel_up")
+    parallel_up_with = next(r for r in results_with_decay if r.scenario == "parallel_up")
+    assert parallel_up_with.nii_result.nii_12m != pytest.approx(parallel_up_without.nii_result.nii_12m)

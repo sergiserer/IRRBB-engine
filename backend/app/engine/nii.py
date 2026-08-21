@@ -63,7 +63,22 @@ def compute_nii(
     no se reinviste -- sale gratis de que generate_all_cash_flows ya deja
     de emitir flujos para un instrumento tras su vencimiento/amortización.
     Suma flow_type='interest': activo suma, pasivo resta. Flujos fuera de
-    la ventana de HORIZON_MONTHS meses se descartan (ver month_index)."""
+    la ventana de HORIZON_MONTHS meses se descartan (ver month_index).
+
+    Cash/payment-date convention: cada flujo de interés se asigna
+    íntegramente a su mes de PAGO, no se prorratea según cuánto de su
+    periodo de devengo cae antes o después de as_of_date. Esto ya
+    documenta el borde lejano de la ventana (un cupón que en la práctica
+    solapase el mes 24 no se prorratea, se descarta entero -- ver
+    month_index). El borde cercano tiene el mismo convenio pero no
+    estaba documentado: un instrumento cuyo periodo de devengo actual
+    empezó ANTES de as_of_date (p.ej. un depósito a plazo cerca de
+    vencimiento, o cualquier instrumento a mitad de cupón en as_of_date)
+    cuenta su cupón completo -- incluyendo el interés devengado antes de
+    as_of_date -- en la proyección de NII a 12/24 meses si su fecha de
+    pago cae dentro de la ventana. Es una simplificación deliberada de
+    esta fase (misma categoría que el borde lejano ya documentado), no
+    un bug: el prorrateo por devengo queda fuera del alcance de Fase 6."""
     boundaries = month_boundaries(as_of_date)
     monthly = [0.0] * HORIZON_MONTHS
 
