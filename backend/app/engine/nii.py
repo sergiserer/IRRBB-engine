@@ -92,3 +92,51 @@ def compute_nii(
                 monthly[idx] -= cf.amount
 
     return NIIResult(as_of_date=as_of_date, monthly_net_interest=monthly)
+
+
+from app.domain.shocks import ShockConfig, apply_shock
+
+NII_SCENARIOS = ["parallel_up", "parallel_down"]
+
+
+@dataclass
+class NIIScenarioResult:
+    scenario: str
+    base_nii_12m: float
+    base_nii_24m: float
+    nii_result: NIIResult
+    delta_nii_12m: float
+    delta_nii_24m: float
+
+
+def run_nii_scenarios(
+    balance_sheet: BalanceSheet,
+    as_of_date: date,
+    base_curve: YieldCurve,
+    currency: str,
+    config: ShockConfig,
+    cpr_annual: float = 0.0,
+    nmd_decay_config: NmdDecayConfig | None = None,
+) -> List[NIIScenarioResult]:
+    """Corre compute_nii bajo base_curve y bajo cada una de las 2 curvas
+    de NII_SCENARIOS (subconjunto de app.domain.shocks.SCENARIOS -- EBA
+    GL/2022/14 exige NII bajo (al menos) parallel up/down para el NII
+    SOT, a diferencia de los 6 escenarios del EVE SOT). delta_nii sigue
+    la misma convención que ShockScenarioResult.delta_eve: base - escenario,
+    positivo = caída de NII bajo el escenario."""
+    base_result = compute_nii(balance_sheet, as_of_date, base_curve, cpr_annual, nmd_decay_config)
+    results: List[NIIScenarioResult] = []
+    for scenario in NII_SCENARIOS:
+        shocked_curve = apply_shock(base_curve, scenario, currency, config)
+        nii_result = compute_nii(balance_sheet, as_of_date, shocked_curve, cpr_annual, nmd_decay_config)
+        results.append(
+            NIIScenarioResult(
+                scenario=scenario,
+                base_nii_12m=base_result.nii_12m,
+                base_nii_24m=base_result.nii_24m,
+                nii_result=nii_result,
+                delta_nii_12m=base_result.nii_12m - nii_result.nii_12m,
+                delta_nii_24m=base_result.nii_24m - nii_result.nii_24m,
+            )
+        )
+    return results

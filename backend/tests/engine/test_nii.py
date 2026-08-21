@@ -189,3 +189,46 @@ def test_compute_nii_nets_swap_receive_and_pay_legs_by_month():
     assert result.monthly_net_interest[12] == pytest.approx(30_000.0, rel=1e-6)
     assert result.nii_12m == pytest.approx(0.0)
     assert result.nii_24m == pytest.approx(30_000.0, rel=1e-6)
+
+
+def test_run_nii_scenarios_parallel_up_and_down_move_nii_in_opposite_directions():
+    from pathlib import Path
+
+    from app.domain.shocks import load_shock_config
+    from app.engine.nii import NII_SCENARIOS, run_nii_scenarios
+
+    CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "eba_shocks.yaml"
+
+    # Libro sensible a activo por construcción: un único bono variable
+    # (sin pasivo variable que lo compense). Bajo una curva base plana,
+    # un shock paralelo cambia cada forward rate en la misma constante,
+    # así que cada cupón trimestral sube estrictamente bajo parallel_up y
+    # baja estrictamente bajo parallel_down frente a la curva base -- el
+    # signo de delta_nii (base - escenario) debe diferir entre los dos
+    # escenarios sea cual sea la magnitud exacta del shock EUR en
+    # eba_shocks.yaml.
+    bond = Bond(
+        instrument_id="BONDFLOAT",
+        currency="EUR",
+        notional=1_000_000,
+        start_date=date(2025, 1, 1),
+        maturity_date=date(2030, 1, 1),
+        rate_type="floating",
+        spread=0.0,
+        reference_index="EURIBOR_3M",
+        repricing_frequency_months=3,
+        next_repricing_date=date(2025, 4, 1),
+        coupon_frequency_months=3,
+    )
+    balance_sheet = BalanceSheet(bonds=[bond])
+    as_of_date = date(2025, 1, 1)
+    base_curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+    config = load_shock_config(CONFIG_PATH)
+
+    results = run_nii_scenarios(balance_sheet, as_of_date, base_curve, "EUR", config)
+
+    assert [r.scenario for r in results] == NII_SCENARIOS
+    up = next(r for r in results if r.scenario == "parallel_up")
+    down = next(r for r in results if r.scenario == "parallel_down")
+    assert up.delta_nii_12m * down.delta_nii_12m < 0
+    assert up.delta_nii_24m * down.delta_nii_24m < 0
