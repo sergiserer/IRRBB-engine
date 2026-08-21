@@ -1,11 +1,19 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 
+from app.data.loaders import load_balance_sheet
+from app.domain.shocks import load_shock_config
 from app.domain.sot import SOTConfig
+from app.domain.yield_curve import CurvePoint, YieldCurve
 from app.engine.eve import EVEResult
-from app.engine.shocks import ShockScenarioResult
+from app.engine.shocks import ShockScenarioResult, run_eba_shock_scenarios
 from app.engine.sot import compute_sot
+
+DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
+SHOCK_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "eba_shocks.yaml"
+AS_OF_DATE = date(2026, 8, 14)  # same as test_shock_scenarios.py
 
 
 def _result(scenario: str, delta_eve: float) -> ShockScenarioResult:
@@ -87,3 +95,27 @@ def test_compute_sot_worst_scenario_ignores_large_gains():
     assert result.worst_delta_eve == pytest.approx(200_000.0)
     assert result.ratio == pytest.approx(0.2)
     assert result.breaches is True
+
+
+def test_compute_sot_integrates_with_real_run_eba_shock_scenarios():
+    # No es un caso de referencia a mano (los valores de EVE ya estan
+    # verificados por test_shock_scenarios.py) -- confirma que compute_sot
+    # conecta correctamente con la salida real de run_eba_shock_scenarios:
+    # el peor delta_eve/escenario que compute_sot reporta debe coincidir
+    # con el maximo calculado independientemente aqui mismo.
+    balance_sheet = load_balance_sheet(DATA_DIR)
+    base_curve = YieldCurve([CurvePoint(tenor_years=1.0, rate=0.03)])
+    shock_config = load_shock_config(SHOCK_CONFIG_PATH)
+    scenario_results = run_eba_shock_scenarios(balance_sheet, AS_OF_DATE, base_curve, "EUR", shock_config)
+    sot_config = SOTConfig(threshold_pct=0.15)
+
+    result = compute_sot(scenario_results, tier1_capital=50_000_000.0, config=sot_config)
+
+    expected_worst = max(scenario_results, key=lambda r: r.delta_eve)
+    assert result.worst_scenario == expected_worst.scenario
+    assert result.worst_delta_eve == pytest.approx(expected_worst.delta_eve)
+    assert result.threshold_amount == pytest.approx(50_000_000.0 * 0.15)
+    assert result.ratio == pytest.approx(expected_worst.delta_eve / 50_000_000.0)
+    assert result.breaches == (expected_worst.delta_eve > 50_000_000.0 * 0.15)
+    assert result.scenario_results == scenario_results
+    assert len(result.scenario_results) == 6
