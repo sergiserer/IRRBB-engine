@@ -22,6 +22,7 @@ from app.domain.prepayment import load_prepayment_config
 from app.domain.shocks import load_shock_config
 from app.domain.sot import load_sot_config
 from app.engine.eve import compute_eve
+from app.engine.nii import run_nii_scenarios
 from app.engine.shocks import run_eba_shock_scenarios
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
@@ -97,3 +98,22 @@ def test_get_shocks_matches_direct_engine_call(client):
         assert r["base_eve"] == pytest.approx(e.base_eve)
         assert r["delta_eve"] == pytest.approx(e.delta_eve)
         assert r["eve_result"]["eve"] == pytest.approx(e.eve_result.eve)
+
+
+def test_get_nii_matches_direct_engine_call(client):
+    response = client.get("/nii")
+    assert response.status_code == 200
+    expected = run_nii_scenarios(
+        _balance_sheet, AS_OF_DATE, _yield_curve, "EUR", _shock_config, _cpr_annual, _nmd_decay_config
+    )
+    body = response.json()
+    assert len(body) == 2
+    assert [r["scenario"] for r in body] == [e.scenario for e in expected]
+    for r, e in zip(body, expected):
+        assert r["base_nii_12m"] == pytest.approx(e.base_nii_12m)
+        assert r["base_nii_24m"] == pytest.approx(e.base_nii_24m)
+        assert r["delta_nii_12m"] == pytest.approx(e.delta_nii_12m)
+        assert r["delta_nii_24m"] == pytest.approx(e.delta_nii_24m)
+        assert r["nii_12m"] == pytest.approx(e.nii_result.nii_12m)
+        assert r["nii_24m"] == pytest.approx(e.nii_result.nii_24m)
+        assert r["monthly_net_interest"] == pytest.approx(e.nii_result.monthly_net_interest)
