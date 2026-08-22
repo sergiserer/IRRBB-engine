@@ -8,14 +8,18 @@ from app.api.dependencies import (
     get_as_of_date,
     get_balance_sheet,
     get_cpr_annual,
+    get_currency,
     get_nmd_decay_config,
+    get_shock_config,
     get_yield_curve,
 )
-from app.api.schemas import BalanceSheetSummary, EVEResponse
+from app.api.schemas import BalanceSheetSummary, EVEResponse, ShockScenarioResponse
 from app.domain.balance_sheet import BalanceSheet
 from app.domain.nmd_decay import NmdDecayConfig
+from app.domain.shocks import ShockConfig
 from app.domain.yield_curve import YieldCurve
 from app.engine.eve import EVEResult, compute_eve
+from app.engine.shocks import ShockScenarioResult, run_eba_shock_scenarios
 
 
 router = APIRouter()
@@ -59,3 +63,28 @@ def get_eve(
 ) -> EVEResponse:
     result = compute_eve(balance_sheet, as_of_date, yield_curve, cpr_annual, nmd_decay_config)
     return _eve_response(result)
+
+
+def _shock_scenario_response(result: ShockScenarioResult) -> ShockScenarioResponse:
+    return ShockScenarioResponse(
+        scenario=result.scenario,
+        base_eve=result.base_eve,
+        delta_eve=result.delta_eve,
+        eve_result=_eve_response(result.eve_result),
+    )
+
+
+@router.get("/shocks", response_model=list[ShockScenarioResponse])
+def get_shocks(
+    balance_sheet: BalanceSheet = Depends(get_balance_sheet),
+    as_of_date: date = Depends(get_as_of_date),
+    yield_curve: YieldCurve = Depends(get_yield_curve),
+    currency: str = Depends(get_currency),
+    shock_config: ShockConfig = Depends(get_shock_config),
+    cpr_annual: float = Depends(get_cpr_annual),
+    nmd_decay_config: NmdDecayConfig = Depends(get_nmd_decay_config),
+) -> list[ShockScenarioResponse]:
+    results = run_eba_shock_scenarios(
+        balance_sheet, as_of_date, yield_curve, currency, shock_config, cpr_annual, nmd_decay_config
+    )
+    return [_shock_scenario_response(r) for r in results]

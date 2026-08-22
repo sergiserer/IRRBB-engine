@@ -22,6 +22,7 @@ from app.domain.prepayment import load_prepayment_config
 from app.domain.shocks import load_shock_config
 from app.domain.sot import load_sot_config
 from app.engine.eve import compute_eve
+from app.engine.shocks import run_eba_shock_scenarios
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
@@ -81,3 +82,18 @@ def test_get_eve_matches_direct_engine_call(client):
     assert body["pv_liabilities"] == pytest.approx(expected.pv_liabilities)
     assert body["swap_net_pv"] == pytest.approx(expected.swap_net_pv)
     assert body["eve"] == pytest.approx(expected.eve)
+
+
+def test_get_shocks_matches_direct_engine_call(client):
+    response = client.get("/shocks")
+    assert response.status_code == 200
+    expected = run_eba_shock_scenarios(
+        _balance_sheet, AS_OF_DATE, _yield_curve, "EUR", _shock_config, _cpr_annual, _nmd_decay_config
+    )
+    body = response.json()
+    assert len(body) == 6
+    assert [r["scenario"] for r in body] == [e.scenario for e in expected]
+    for r, e in zip(body, expected):
+        assert r["base_eve"] == pytest.approx(e.base_eve)
+        assert r["delta_eve"] == pytest.approx(e.delta_eve)
+        assert r["eve_result"]["eve"] == pytest.approx(e.eve_result.eve)
