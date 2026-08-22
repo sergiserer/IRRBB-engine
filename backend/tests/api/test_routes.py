@@ -24,6 +24,7 @@ from app.domain.sot import load_sot_config
 from app.engine.eve import compute_eve
 from app.engine.nii import run_nii_scenarios
 from app.engine.shocks import run_eba_shock_scenarios
+from app.engine.sot import compute_sot
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
@@ -117,3 +118,32 @@ def test_get_nii_matches_direct_engine_call(client):
         assert r["nii_12m"] == pytest.approx(e.nii_result.nii_12m)
         assert r["nii_24m"] == pytest.approx(e.nii_result.nii_24m)
         assert r["monthly_net_interest"] == pytest.approx(e.nii_result.monthly_net_interest)
+
+
+def test_get_sot_matches_direct_engine_call(client):
+    tier1_capital = 100_000_000.0
+    response = client.get("/sot", params={"tier1_capital": tier1_capital})
+    assert response.status_code == 200
+    scenario_results = run_eba_shock_scenarios(
+        _balance_sheet, AS_OF_DATE, _yield_curve, "EUR", _shock_config, _cpr_annual, _nmd_decay_config
+    )
+    expected = compute_sot(scenario_results, tier1_capital, _sot_config)
+    body = response.json()
+    assert body["tier1_capital"] == pytest.approx(expected.tier1_capital)
+    assert body["threshold_pct"] == pytest.approx(expected.threshold_pct)
+    assert body["threshold_amount"] == pytest.approx(expected.threshold_amount)
+    assert body["worst_scenario"] == expected.worst_scenario
+    assert body["worst_delta_eve"] == pytest.approx(expected.worst_delta_eve)
+    assert body["ratio"] == pytest.approx(expected.ratio)
+    assert body["breaches"] == expected.breaches
+    assert len(body["scenario_results"]) == 6
+
+
+def test_get_sot_missing_tier1_capital_returns_422(client):
+    response = client.get("/sot")
+    assert response.status_code == 422
+
+
+def test_get_sot_non_positive_tier1_capital_returns_422(client):
+    response = client.get("/sot", params={"tier1_capital": 0})
+    assert response.status_code == 422

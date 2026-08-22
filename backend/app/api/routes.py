@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies import (
     get_as_of_date,
@@ -11,16 +11,19 @@ from app.api.dependencies import (
     get_currency,
     get_nmd_decay_config,
     get_shock_config,
+    get_sot_config,
     get_yield_curve,
 )
-from app.api.schemas import BalanceSheetSummary, EVEResponse, NIIScenarioResponse, ShockScenarioResponse
+from app.api.schemas import BalanceSheetSummary, EVEResponse, NIIScenarioResponse, ShockScenarioResponse, SOTResponse
 from app.domain.balance_sheet import BalanceSheet
 from app.domain.nmd_decay import NmdDecayConfig
 from app.domain.shocks import ShockConfig
+from app.domain.sot import SOTConfig
 from app.domain.yield_curve import YieldCurve
 from app.engine.eve import EVEResult, compute_eve
 from app.engine.nii import NIIScenarioResult, run_nii_scenarios
 from app.engine.shocks import ShockScenarioResult, run_eba_shock_scenarios
+from app.engine.sot import compute_sot
 
 
 router = APIRouter()
@@ -119,3 +122,31 @@ def get_nii(
         balance_sheet, as_of_date, yield_curve, currency, shock_config, cpr_annual, nmd_decay_config
     )
     return [_nii_scenario_response(r) for r in results]
+
+
+@router.get("/sot", response_model=SOTResponse)
+def get_sot(
+    tier1_capital: float = Query(..., gt=0),
+    balance_sheet: BalanceSheet = Depends(get_balance_sheet),
+    as_of_date: date = Depends(get_as_of_date),
+    yield_curve: YieldCurve = Depends(get_yield_curve),
+    currency: str = Depends(get_currency),
+    shock_config: ShockConfig = Depends(get_shock_config),
+    sot_config: SOTConfig = Depends(get_sot_config),
+    cpr_annual: float = Depends(get_cpr_annual),
+    nmd_decay_config: NmdDecayConfig = Depends(get_nmd_decay_config),
+) -> SOTResponse:
+    scenario_results = run_eba_shock_scenarios(
+        balance_sheet, as_of_date, yield_curve, currency, shock_config, cpr_annual, nmd_decay_config
+    )
+    result = compute_sot(scenario_results, tier1_capital, sot_config)
+    return SOTResponse(
+        tier1_capital=result.tier1_capital,
+        threshold_pct=result.threshold_pct,
+        threshold_amount=result.threshold_amount,
+        worst_scenario=result.worst_scenario,
+        worst_delta_eve=result.worst_delta_eve,
+        ratio=result.ratio,
+        breaches=result.breaches,
+        scenario_results=[_shock_scenario_response(r) for r in result.scenario_results],
+    )
