@@ -147,3 +147,11 @@ def test_get_sot_missing_tier1_capital_returns_422(client):
 def test_get_sot_non_positive_tier1_capital_returns_422(client):
     response = client.get("/sot", params={"tier1_capital": 0})
     assert response.status_code == 422
+
+
+@pytest.mark.integration
+def test_real_app_startup_and_balance_sheet_endpoint():
+    with TestClient(app) as real_client:
+        response = real_client.get("/balance-sheet")
+    assert response.status_code == 200
+    assert response.json()["total_assets"] > 0
