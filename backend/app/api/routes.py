@@ -126,7 +126,7 @@ def get_nii(
 
 @router.get("/sot", response_model=SOTResponse)
 def get_sot(
-    tier1_capital: float = Query(..., gt=0),
+    tier1_capital: float = Query(..., gt=0, allow_inf_nan=False),
     balance_sheet: BalanceSheet = Depends(get_balance_sheet),
     as_of_date: date = Depends(get_as_of_date),
     yield_curve: YieldCurve = Depends(get_yield_curve),
