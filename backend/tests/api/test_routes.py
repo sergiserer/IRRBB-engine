@@ -21,6 +21,7 @@ from app.domain.nmd_decay import load_nmd_decay_config
 from app.domain.prepayment import load_prepayment_config
 from app.domain.shocks import load_shock_config
 from app.domain.sot import load_sot_config
+from app.engine.eve import compute_eve
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
@@ -68,3 +69,15 @@ def test_get_balance_sheet_summary(client):
 def test_cors_allows_configured_localhost_origin(client):
     response = client.get("/eve", headers={"Origin": "http://localhost:5173"})
     assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_get_eve_matches_direct_engine_call(client):
+    response = client.get("/eve")
+    assert response.status_code == 200
+    expected = compute_eve(_balance_sheet, AS_OF_DATE, _yield_curve, _cpr_annual, _nmd_decay_config)
+    body = response.json()
+    assert body["as_of_date"] == AS_OF_DATE.isoformat()
+    assert body["pv_assets"] == pytest.approx(expected.pv_assets)
+    assert body["pv_liabilities"] == pytest.approx(expected.pv_liabilities)
+    assert body["swap_net_pv"] == pytest.approx(expected.swap_net_pv)
+    assert body["eve"] == pytest.approx(expected.eve)

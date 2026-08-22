@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_balance_sheet
-from app.api.schemas import BalanceSheetSummary
+from app.api.dependencies import (
+    get_as_of_date,
+    get_balance_sheet,
+    get_cpr_annual,
+    get_nmd_decay_config,
+    get_yield_curve,
+)
+from app.api.schemas import BalanceSheetSummary, EVEResponse
 from app.domain.balance_sheet import BalanceSheet
+from app.domain.nmd_decay import NmdDecayConfig
+from app.domain.yield_curve import YieldCurve
+from app.engine.eve import EVEResult, compute_eve
 
 
 router = APIRouter()
@@ -26,3 +37,25 @@ def get_balance_sheet_summary(
             "swaps": len(balance_sheet.swaps),
         },
     )
+
+
+def _eve_response(result: EVEResult) -> EVEResponse:
+    return EVEResponse(
+        as_of_date=result.as_of_date,
+        pv_assets=result.pv_assets,
+        pv_liabilities=result.pv_liabilities,
+        swap_net_pv=result.swap_net_pv,
+        eve=result.eve,
+    )
+
+
+@router.get("/eve", response_model=EVEResponse)
+def get_eve(
+    balance_sheet: BalanceSheet = Depends(get_balance_sheet),
+    as_of_date: date = Depends(get_as_of_date),
+    yield_curve: YieldCurve = Depends(get_yield_curve),
+    cpr_annual: float = Depends(get_cpr_annual),
+    nmd_decay_config: NmdDecayConfig = Depends(get_nmd_decay_config),
+) -> EVEResponse:
+    result = compute_eve(balance_sheet, as_of_date, yield_curve, cpr_annual, nmd_decay_config)
+    return _eve_response(result)
